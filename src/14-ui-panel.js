@@ -80,9 +80,11 @@
       row("输入 + 输出", r.total ? fmtNum(r.total) + " tok" : "—", "后端本轮累计总用量，不等于新增输出量") +
       row("工具参数 · 含在输出内", r.toolTokens > 0 ? "≈" + fmtNum(r.toolTokens) + " tok" : "—", "工具参数是输出的一部分；拆分量为校准后的估算，不与输出总量重复相加") +
       row("缓存命中 · 含在输入内", r.cacheHit > 0 ? fmtNum(r.cacheHit) + " tok" : "—");
-    if (r.afp != null && r.afp > 0) usage += row("套餐抵扣", fmtAFP(r.afp) + " AFP", channelTip(r.channel, r.provider)) + row("其中缓存重计", rebillNote(r.channel, r.cacheHit, r.model).replace(/[（）]/g, '').replace('缓存重计 ', '') || "—");
-    if (r.cost != null) usage += row("费用", fmtMoney(r.cost, "¥"), channelTip(r.channel, r.provider));
-    if (r.coefRange && r.afpLo != null) usage += row("套餐抵扣 · 参考", fmtAFPRange({lo:r.afpLo,hi:r.afpHi}), ALIAS_TIP);
+    if (r.afp != null && r.afp > 0) usage += row("套餐抵扣", fmtPlan(r.afp) + " 额度", channelTip(r.channel, r.provider)) + row("其中缓存重计", rebillNote(r.channel, r.cacheHit, r.model).replace(/[（）]/g, '').replace('缓存重计 ', '') || "—");
+    if (r.cost != null) usage += r.costUnit === "plan"
+      ? row("套餐抵扣", fmtMoney(r.cost, "") + " 额度", channelTip(r.channel, r.provider))
+      : row("费用", fmtMoney(r.cost, "¥"), channelTip(r.channel, r.provider));
+    if (r.coefRange && r.afpLo != null) usage += row("套餐抵扣 · 参考", fmtPlanRange({lo:r.afpLo,hi:r.afpHi}), ALIAS_TIP);
     if (r.coefMissing || r.priceMissing || !r.channel) usage += row("计费", r.coefMissing ? "系数未知" : r.priceMissing ? "无价表" : "渠道未识别", channelTip(r.channel,r.provider));
     var observed = !r.historyOnly && speed > 0;
     var speedNote = r.historyOnly ? "历史仅恢复用量，未观测生成速度" : r.attached ? "仅统计接入后有效生成，回放不计速" : "排除首字、工具等待及缓冲冲刷";
@@ -183,6 +185,7 @@
       segments: segs, cacheHit: st.cacheHitTokens || 0,
       cost: _money.cost,
       afp: _money.afp,
+      costUnit: _money.costUnit,
       channel: _money.channel,
       channelSrc: st.channelSrc || "",
       provider: st.provider || _money.provider,

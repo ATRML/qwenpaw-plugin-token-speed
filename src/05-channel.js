@@ -2,11 +2,11 @@
   // 05-channel.js · 计费渠道判定（provider 三级证据链 / active_llm / providerMap）
   // ════════════════════════════════════════════════════════════
   // ---------- 计费渠道（v1.8.0） ----------
-  // 病根（用户实测反馈："明明用的 DeepSeek，为啥出现 AFP"）：模型名无法决定计费渠道
-  // ——deepseek-v4-flash 在火山方舟 Agent Plan（AFP 抵扣）与 DeepSeek 官方（人民币）
-  // 都在卖，旧逻辑看名字就判 AFP（还把它写进了 AFP 系数表），于是官方按量的回合被
-  // 算成套餐抵扣。渠道必须按 provider 判：
-  //   provider_id 含 agentplan / base_url 含 /api/plan/  → afp（方舟套餐抵扣）
+  // 病根（用户实测反馈："明明用的 DeepSeek，为啥显示套餐抵扣"）：模型名无法决定计费渠道
+  // ——同一个 deepseek-v4-flash，在套餐渠道（Agent Plan，按额度抵扣）与 DeepSeek 官方
+  // （人民币按量）都在卖，旧逻辑看名字就套套餐系数（还把它写进了套餐系数表），于是官方
+  // 按量的回合被算成套餐抵扣。渠道必须按 provider 判：
+  //   provider_id 含 agentplan / base_url 含 /api/plan/  → plan（套餐渠道，按额度抵扣）
   //   provider deepseek / base_url 含 deepseek.com       → deepseek（官方按量，人民币）
   //   其他/拿不到                                        → other（不显示金额，不猜）
   var ACTIVE_LLM_KEY = "qp_token_speed_active_llm";     // {ts, providerId, model}
@@ -30,13 +30,13 @@
     return hit || "";
   }
 
-  // 渠道判定：只认 provider 证据，拿不到证据返回 ""（而不是默认 AFP——那正是旧 bug）
+  // 渠道判定：只认 provider 证据，拿不到证据返回 ""（而不是默认套餐抵扣——那正是旧 bug）
   function resolveChannel(providerId, baseUrl) {
     var pid = String(providerId || "").toLowerCase();
     var bu = String(baseUrl || "").toLowerCase();
     // 顺序关键：/api/coding 必须在 /api/plan 前判（两者都可能含 "coding" 无关，但 base 不重叠，保险起见先判）
     if (/\/api\/coding(\/|$)/.test(bu) || /coding[_\-]?plan/.test(pid)) return "coding";
-    if (/agentplan|agent-plan|agent_plan/.test(pid) || /\/api\/plan\//.test(bu)) return "afp";
+    if (/agentplan|agent-plan|agent_plan/.test(pid) || /\/api\/plan\//.test(bu)) return "plan";
     if (pid === "deepseek" || pid.indexOf("deepseek") >= 0 || bu.indexOf("deepseek.com") >= 0) return "deepseek";
     // v1.18.0：自定义渠道映射（纯数据：PRICING.customChannels，可经 localStorage 覆盖层注入）——
     // provider_id/base_url 命中子串 → 返回配置的渠道名；没配置/没命中照旧落 other
@@ -108,10 +108,10 @@
   var mapFetching = false;
   function maybeLoadProviderMap() {
     if (!activeLlm || !activeLlm.providerId) return;
-    // provider_id 本身就能定性（方舟套餐 / DeepSeek 官方）就不用去拉 base_url 了；
+    // provider_id 本身就能定性（套餐渠道 / DeepSeek 官方）就不用去拉 base_url 了；
     // 只有"认不出"的自定义 provider（例如 huoshanahent 这种）才需要 base_url 佐证
     var ch0 = resolveChannel(activeLlm.providerId, "");
-    if (ch0 === "afp" || ch0 === "deepseek") return;
+    if (ch0 === "plan" || ch0 === "deepseek") return;
     var cached = null;
     try { cached = JSON.parse(localStorage.getItem(PROVIDER_MAP_KEY) || "null"); } catch (e) { /* ignore */ }
     if (cached && cached.map && cached.ts && (Date.now() - cached.ts) < PROVIDER_MAP_TTL) {
@@ -134,7 +134,7 @@
           }
           providerMap = map;
           try { localStorage.setItem(PROVIDER_MAP_KEY, JSON.stringify({ ts: Date.now(), map: map })); } catch (e) { /* ignore */ }
-          applyBillingRetro(true); // base_url 证据刚到位：允许 other → afp/deepseek 的升级
+          applyBillingRetro(true); // base_url 证据刚到位：允许 other → plan/deepseek 的升级
         })
         .catch(function () { mapFetching = false; });
     } catch (e) { mapFetching = false; }

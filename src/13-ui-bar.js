@@ -12,9 +12,9 @@
     return barState("连接中") + '<span class="qp-ts-label">等待首字到达…</span>';
   }
 
-  // v1.8.0：渠道文案（面板 chip + hover 说明）。AFP 是黑话，正文一律说人话
+  // v1.8.0：渠道文案（面板 chip + hover 说明），正文一律说人话；v1.19.0：代号 plan（旧值 afp 兼容显示）
   function channelLabel(ch) {
-    if (ch === "afp") return "方舟套餐";
+    if (ch === "plan" || ch === "afp") return "套餐渠道";
     if (ch === "coding") return "Coding Plan";
     if (ch === "deepseek") return "DeepSeek 官方";
     if (ch === "other") return "其他渠道";
@@ -22,10 +22,10 @@
   }
   function channelTip(ch, provider) {
     var head = "计费渠道：" + channelLabel(ch) + (provider ? "（" + provider + "）" : "") + "。";
-    if (ch === "afp") return head + "走火山方舟 Agent Plan 套餐，按 AFP 点数抵扣——同一个模型名在 DeepSeek 官方是按量付费，两者互斥，所以只能按渠道判";
-    if (ch === "coding") return head + "走火山方舟 Coding Plan（地址 /api/coding/v3），按请求次数计、不是 token/AFP，个人版无公开用量 API → 本插件只报 token，不报金额";
+    if (ch === "plan" || ch === "afp") return head + "走套餐（Agent Plan）渠道，按套餐额度抵扣——同一个模型名在按量渠道是人民币计费，两边计费方式互斥，所以只能按渠道判";
+    if (ch === "coding") return head + "走 Coding Plan 渠道（地址 /api/coding/v3），按请求次数计、不是 token/额度，个人版无公开用量 API → 本插件只报 token，不报金额";
     if (ch === "deepseek") return head + "走 DeepSeek 官方 API，按人民币计价（尖峰/低谷单价不同）";
-    if (ch === "other") return head + "既不是方舟套餐也不是 DeepSeek 官方，本插件没有该渠道价表 → 只报 token，不报金额";
+    if (ch === "other") return head + "不是套餐/DeepSeek 官方这类内置价目渠道，本插件没有该渠道价表 → 只报 token，不报金额（可在覆盖层配 generic 价目）";
     return head + "拿不到 provider 信息（usage.provider_id 为空、/api/models/active 也读不到）→ 只报 token，不报金额。宁可空着，也不按模型名猜一个错数";
   }
 

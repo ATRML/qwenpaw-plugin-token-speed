@@ -1,7 +1,7 @@
 /**
  * QwenPaw 插件：Token 实时速度（前端核心）
  * - 拦截聊天 SSE 流（POST /api/console/chat，响应为 text/event-stream）
- * - 统计：首字延迟 TTFT、实时 token 速度、本轮 token 总量、耗时、工具等待、费用（AFP/人民币）
+ * - 统计：首字延迟 TTFT、实时 token 速度、本轮 token 总量、耗时、工具等待、费用（套餐额度/人民币）
  * - 显示为固定悬浮条（输入框上方），不进入 React 管理树；点击悬浮条展开详情面板
  *   （大号分段速度折线图 + 分段明细 + 完整汇总）
  *
@@ -16,7 +16,7 @@
   if (window.__qpTokenSpeedLoaded) return;
   window.__qpTokenSpeedLoaded = true;
 
-  window.__qpTokenSpeedVersion = "1.18.0";
+  window.__qpTokenSpeedVersion = "1.19.0";
 
   // ════════════════════════════════════════════════════════════
   // 01-core.js · 基础常量 / 页面离开标记 / 会话 ID / 结果持久化
@@ -105,7 +105,7 @@
       lastSpeed: 0, replayEndSeen: false,
       // v1.8.0 计费渠道与收尾取证
       providerUsage: "",   // 本回合 SSE usage 里带的 provider_id（最准证据）
-      channel: "",         // afp / deepseek / other / ""（未识别）
+      channel: "",         // plan / deepseek / other / ""（未识别）
       channelSrc: "",      // usage / active / model / memory（证据强度排序用）
       provider: "",        // 用于显示的渠道来源（provider_id）
       endCause: "",        // stream_end / error_frame / read_error / user_stop
@@ -202,22 +202,23 @@
     if (v == null || !isFinite(v)) return "-";
     return (unit || "") + (v >= 0.01 ? v.toFixed(4) : v.toFixed(6));
   }
-  function fmtAFP(v) {
+  function fmtPlan(v) {
     if (v == null || !isFinite(v)) return "-";
     return v >= 0.05 ? v.toFixed(2) : v.toFixed(4);
   }
 
-  // v1.5.0：缓存重计标注（v1.8.0 起只在渠道=方舟套餐时显示——缓存重计是 Agent Plan
-  // 的计费规则，人民币渠道按缓存价另算，不适用）。实测（2026-09-16 对账）：Agent Plan
-  // 缓存命中按全额系数重复计费——5小时窗实际扣费 1290.33 ≈ 全额公式预测 1440；大上下文
-  // 回合 90%+ 的 AFP 来自缓存重计（27步回合：1271.56 里 1177 是重计）
+  // v1.5.0：缓存重计标注（v1.8.0 起只在套餐渠道显示——缓存重计是套餐计费规则，人民币
+  // 渠道按缓存价另算，不适用）。实测（2026-09-16 对账）：套餐缓存命中按全额系数重复计费
+  // ——5小时窗实际扣费 1290.33 ≈ 全额公式预测 1440；大上下文回合 90%+ 的套餐额度来自缓存
+  // 重计（27步回合：1271.56 里 1177 是重计）
+  // v1.19.0：旧历史数据渠道名 "afp" 一并认（新代号 "plan"）
   function rebillNote(channel, cacheHitTok, model) {
-    if (channel !== "afp") return "";
-    var c = afpCoef(model);
+    if (channel !== "plan" && channel !== "afp") return "";
+    var c = planCoef(model);
     if (!c || !cacheHitTok || cacheHitTok <= 0) return "";
     var rebill = cacheHitTok * c / 10000;
     if (rebill < 0.05) return "";
-    return "（缓存重计 " + fmtAFP(rebill) + "）";
+    return "（缓存重计 " + fmtPlan(rebill) + "）";
   }
 
   // 历史结果距今的相对时间（>10 分钟且有可靠 ts 才显示；
@@ -312,11 +313,11 @@
   // 05-channel.js · 计费渠道判定（provider 三级证据链 / active_llm / providerMap）
   // ════════════════════════════════════════════════════════════
   // ---------- 计费渠道（v1.8.0） ----------
-  // 病根（用户实测反馈："明明用的 DeepSeek，为啥出现 AFP"）：模型名无法决定计费渠道
-  // ——deepseek-v4-flash 在火山方舟 Agent Plan（AFP 抵扣）与 DeepSeek 官方（人民币）
-  // 都在卖，旧逻辑看名字就判 AFP（还把它写进了 AFP 系数表），于是官方按量的回合被
-  // 算成套餐抵扣。渠道必须按 provider 判：
-  //   provider_id 含 agentplan / base_url 含 /api/plan/  → afp（方舟套餐抵扣）
+  // 病根（用户实测反馈："明明用的 DeepSeek，为啥显示套餐抵扣"）：模型名无法决定计费渠道
+  // ——同一个 deepseek-v4-flash，在套餐渠道（Agent Plan，按额度抵扣）与 DeepSeek 官方
+  // （人民币按量）都在卖，旧逻辑看名字就套套餐系数（还把它写进了套餐系数表），于是官方
+  // 按量的回合被算成套餐抵扣。渠道必须按 provider 判：
+  //   provider_id 含 agentplan / base_url 含 /api/plan/  → plan（套餐渠道，按额度抵扣）
   //   provider deepseek / base_url 含 deepseek.com       → deepseek（官方按量，人民币）
   //   其他/拿不到                                        → other（不显示金额，不猜）
   var ACTIVE_LLM_KEY = "qp_token_speed_active_llm";     // {ts, providerId, model}
@@ -340,13 +341,13 @@
     return hit || "";
   }
 
-  // 渠道判定：只认 provider 证据，拿不到证据返回 ""（而不是默认 AFP——那正是旧 bug）
+  // 渠道判定：只认 provider 证据，拿不到证据返回 ""（而不是默认套餐抵扣——那正是旧 bug）
   function resolveChannel(providerId, baseUrl) {
     var pid = String(providerId || "").toLowerCase();
     var bu = String(baseUrl || "").toLowerCase();
     // 顺序关键：/api/coding 必须在 /api/plan 前判（两者都可能含 "coding" 无关，但 base 不重叠，保险起见先判）
     if (/\/api\/coding(\/|$)/.test(bu) || /coding[_\-]?plan/.test(pid)) return "coding";
-    if (/agentplan|agent-plan|agent_plan/.test(pid) || /\/api\/plan\//.test(bu)) return "afp";
+    if (/agentplan|agent-plan|agent_plan/.test(pid) || /\/api\/plan\//.test(bu)) return "plan";
     if (pid === "deepseek" || pid.indexOf("deepseek") >= 0 || bu.indexOf("deepseek.com") >= 0) return "deepseek";
     // v1.18.0：自定义渠道映射（纯数据：PRICING.customChannels，可经 localStorage 覆盖层注入）——
     // provider_id/base_url 命中子串 → 返回配置的渠道名；没配置/没命中照旧落 other
@@ -418,10 +419,10 @@
   var mapFetching = false;
   function maybeLoadProviderMap() {
     if (!activeLlm || !activeLlm.providerId) return;
-    // provider_id 本身就能定性（方舟套餐 / DeepSeek 官方）就不用去拉 base_url 了；
+    // provider_id 本身就能定性（套餐渠道 / DeepSeek 官方）就不用去拉 base_url 了；
     // 只有"认不出"的自定义 provider（例如 huoshanahent 这种）才需要 base_url 佐证
     var ch0 = resolveChannel(activeLlm.providerId, "");
-    if (ch0 === "afp" || ch0 === "deepseek") return;
+    if (ch0 === "plan" || ch0 === "deepseek") return;
     var cached = null;
     try { cached = JSON.parse(localStorage.getItem(PROVIDER_MAP_KEY) || "null"); } catch (e) { /* ignore */ }
     if (cached && cached.map && cached.ts && (Date.now() - cached.ts) < PROVIDER_MAP_TTL) {
@@ -444,45 +445,49 @@
           }
           providerMap = map;
           try { localStorage.setItem(PROVIDER_MAP_KEY, JSON.stringify({ ts: Date.now(), map: map })); } catch (e) { /* ignore */ }
-          applyBillingRetro(true); // base_url 证据刚到位：允许 other → afp/deepseek 的升级
+          applyBillingRetro(true); // base_url 证据刚到位：允许 other → plan/deepseek 的升级
         })
         .catch(function () { mapFetching = false; });
     } catch (e) { mapFetching = false; }
   }
 
   // ════════════════════════════════════════════════════════════
-  // 06-pricing.js · PRICING 价目表静态数据区 + AFP/人民币/区间计算
+  // 06-pricing.js · PRICING 价目表静态数据区 + 套餐额度/人民币/区间计算
   // ════════════════════════════════════════════════════════════
-  // ---------- 方舟 Agent Plan（AFP）抵扣 ----------
+  // ---------- 套餐渠道（Agent Plan）抵扣 ----------
   // 依据官方计费规格文档：
-  // AFP = (输入token×系数 + 输出token×系数) / 10000（2026-09-01 起入=出系数）
+  // 额度 = (输入token×系数 + 输出token×系数) / 10000（2026-09-01 起入=出系数）
   // 官方对拍示例：seed-2.1-turbo 50k入/0.5k出 → (50000×2.5+500×2.5)/10000 = 12.625
-  // v1.8.0：这张表只在渠道=afp 时才查（同名模型在别家在卖别的计费方式）
+  // v1.8.0：这张表只在渠道=plan 时才查（同名模型在别家在卖别的计费方式）
+  // v1.19.0：渠道代号 afp 更名 plan；旧历史数据与覆盖层旧键名均兼容
   // ════════════════════════════════════════════════════════════════════
   // 价目表 · 计费静态数据（v1.13.2 从逻辑里摘出，统一结构）——调价只改这一块
   //
   // 结构约定：所有"按模型名匹配"的表统一为 { keys:[小写模型名子串], ... }，命中即用。
-  //   PRICING.afp.base            方舟 Agent Plan 基础系数（数组顺序 = 匹配优先级！）
-  //   PRICING.afp.promo           限时活动系数（UTC 毫秒窗口，过期自动失效回退基础表；exact:true 全字匹配）
+  //   PRICING.plan.base            套餐渠道（Agent Plan）基础系数（数组顺序 = 匹配优先级！）
+  //   PRICING.plan.promo           限时活动系数（UTC 毫秒窗口，过期自动失效回退基础表；exact:true 全字匹配）
   //   PRICING.deepseek.models     DeepSeek 官方价表（元/百万 token：offPeak/peak × cacheHit/input/output）
   //   PRICING.deepseek.peakHours  高峰时段（本地时间闭开区间，周末全天低谷）
   //   PRICING.alias               路由别名（控制台 Auto）：keys + 悬浮提示文案
-  //   PRICING.generic.models      泛渠道价表（v1.18.0）：{ channel, keys, table }，任意渠道配表即按量算钱、
-  //                               UI 自动显示"费用"；table 的 peak/peakHours/weekendOffPeak/cacheHit 全部可选
-  //                               （缺 peak 恒低谷、缺 cacheHit 缓存部分按输入价计）
+  //   PRICING.generic.models      泛渠道价表（v1.18.0 建 / v1.19.0 全字段）：{ channel, keys, exact?,
+  //                               table? | coef?, start?, end?, unit?, label? }——任意渠道配条目即算钱，
+  //                               UI 自动显示"费用/套餐抵扣"。table=按量（元/百万，peak/peakHours/
+  //                               weekendOffPeak/cacheHit 可选），coef=套餐（额度=(入+出)×系数/10000），
+  //                               start/end（UTC 毫秒）可选窗口（窗口外跳过回退下一条），unit 默认 cny
   //   PRICING.customChannels      自定义渠道映射（v1.18.0）：{ keys:[provider_id/base_url 子串], channel:"渠道名" }
-  // 运行时覆盖层（v1.18.0）：localStorage["qp_token_speed_pricing"] 放一份 JSON 即可加模型/调价/接渠道，
+  // 运行时覆盖层（v1.18.0 建 / v1.19.0 扩展）：localStorage["qp_token_speed_pricing"] 放一份 JSON 即可加模型/调价/接渠道，
   //   不用改源码重建；用户条目合并进对应表且排在最前（优先命中），解析/结构异常整份忽略并 console.warn，
   //   内置表原样生效。
-  // 数据来源：官方计费规格文档（对拍示例：seed-2.1-turbo 50k入/0.5k出 → 12.625 AFP）
+  // 数据来源：官方计费规格文档（对拍示例：seed-2.1-turbo 50k入/0.5k出 → 12.625 额度）
   //          + 官方核对文档 2026-09-16 + DeepSeek 2026-09-10 调价
   // 原则：没对拍过/官方没公布的，宁可不加（面板显示"系数未知/无价表"），不猜数。
   // ════════════════════════════════════════════════════════════════════
   var PRICING = {
-    // —— 火山方舟 Agent Plan：AFP = (输入tok×系数 + 输出tok×系数) / 10000（2026-09-01 起入=出同系数）
-    afp: {
+    // —— 套餐渠道（Agent Plan）：额度 = (输入tok×系数 + 输出tok×系数) / 10000（2026-09-01 起入=出同系数）
+    // v1.19.0：代号 afp → plan；覆盖层旧键 u.afp 仍兼容
+    plan: {
       // 基础系数表；数组顺序即匹配优先级：glm-5.3-flash(0.5) 必须排在 glm-5.3(4.5) 前（差 9 倍）
-      // v1.8.0：这张表只在渠道=afp 时才查（同名模型在别家在卖别的计费方式）
+      // v1.8.0：这张表只在渠道=plan 时才查（同名模型在别家在卖别的计费方式）
       base: [
         { keys: ["seed-2.0-mini"], coef: 0.25 },
         { keys: ["seed-2.0-lite", "deepseek-v4-flash", "deepseek-v4.1-flash", "glm-5.3-flash", "embedding-vision"], coef: 0.5 },
@@ -514,21 +519,22 @@
     // —— 路由别名（ark-code-latest = 控制台 Auto，手册方式 B，用户 2026-09-16 确认）
     alias: {
       keys: ["ark-code-latest", "ark-latest"],
-      tip: "ark-code-latest 是火山方舟的路由别名，实际走 Auto 模式：真实模型由控制台自动调度，"
+      tip: "ark-code-latest 是控制台的路由别名，实际走 Auto 模式：真实模型由控制台自动调度，"
         + "请求和用量里只带这个别名。Auto 在活动期（2026-06-10～11-08）固定按系数 0.5 抵扣，"
         + "与底层路由到哪个模型无关；活动结束后官方系数未定，届时插件会只给参考区间。"
         + "想要始终精确显示，把模型名写成具体的（如 glm-5.3 / deepseek-v4-flash），别用别名"
     },
-    // —— 泛渠道价表（v1.18.0）：第三方渠道配了表就按量算钱（覆盖层可整体注入）
+    // —— 泛渠道价表（v1.18.0 建 / v1.19.0 全字段）：第三方渠道配了 table 或 coef 就算钱（覆盖层可整体注入）
     generic: { models: [] },
     // —— 自定义渠道映射（v1.18.0）：resolveChannel 在内置判定后、other 前查这张表
     customChannels: []
   };
-  // v1.18.0 · 运行时覆盖层：localStorage["qp_token_speed_pricing"] 放一份 JSON 即可加模型/调价/接渠道，
-  // 不用改源码重建。用户条目合并进对应表并排在最前（优先命中）；JSON 解析失败/结构不对 → 整份忽略并
-  // console.warn，内置表原样生效，绝不因此崩面板。支持字段：
-  //   afp.base / afp.promo / deepseek.models（数组，前置合并）、deepseek.peakHours（替换）、
-  //   deepseek.weekendOffPeak（替换）、alias.keys（前置合并）、generic.models / customChannels（整体提供）
+  // v1.18.0 · 运行时覆盖层（v1.19.0 扩展）：localStorage["qp_token_speed_pricing"] 放一份 JSON 即可
+  // 加模型/调价/接渠道，不用改源码重建。用户条目合并进对应表并排在最前（优先命中）；JSON 解析失败/
+  // 结构不对 → 整份忽略并 console.warn，内置表原样生效，绝不因此崩面板。支持字段：
+  //   plan.base / plan.promo（旧键名 afp.* 仍兼容）/ deepseek.models（数组，前置合并）、
+  //   deepseek.peakHours（替换）、deepseek.weekendOffPeak（替换）、alias.keys（前置合并）、
+  //   generic.models / customChannels（整体提供）
   (function applyPricingOverlay() {
     var raw = null;
     try { raw = localStorage.getItem("qp_token_speed_pricing"); } catch (e) { return; }
@@ -552,8 +558,10 @@
       return true;
     }
     try {
-      if (u.afp && entryArr(u.afp.base)) PRICING.afp.base = u.afp.base.concat(PRICING.afp.base);
-      if (u.afp && promoArr(u.afp.promo)) PRICING.afp.promo = u.afp.promo.concat(PRICING.afp.promo);
+      if (u.plan && entryArr(u.plan.base)) PRICING.plan.base = u.plan.base.concat(PRICING.plan.base);
+      if (u.plan && promoArr(u.plan.promo)) PRICING.plan.promo = u.plan.promo.concat(PRICING.plan.promo);
+      if (u.afp && entryArr(u.afp.base)) PRICING.plan.base = u.afp.base.concat(PRICING.plan.base); // v1.19.0 前旧键名兼容
+      if (u.afp && promoArr(u.afp.promo)) PRICING.plan.promo = u.afp.promo.concat(PRICING.plan.promo);
       if (u.deepseek && entryArr(u.deepseek.models)) PRICING.deepseek.models = u.deepseek.models.concat(PRICING.deepseek.models);
       if (u.deepseek && Object.prototype.toString.call(u.deepseek.peakHours) === "[object Array]") PRICING.deepseek.peakHours = u.deepseek.peakHours;
       if (u.deepseek && typeof u.deepseek.weekendOffPeak === "boolean") PRICING.deepseek.weekendOffPeak = u.deepseek.weekendOffPeak;
@@ -579,20 +587,20 @@
     return "";
   }
 
-  function afpCoef(model) {
+  function planCoef(model) {
     if (!model) return null;
     var m = String(model).toLowerCase();
     var t = Date.now();
-    for (var p = 0; p < PRICING.afp.promo.length; p++) {
-      if (t < PRICING.afp.promo[p].start || t >= PRICING.afp.promo[p].end) continue;
-      for (var pk = 0; pk < PRICING.afp.promo[p].keys.length; pk++) {
-        var kp = PRICING.afp.promo[p].keys[pk];
-        if (PRICING.afp.promo[p].exact ? (m === kp) : (m.indexOf(kp) >= 0)) return PRICING.afp.promo[p].coef;
+    for (var p = 0; p < PRICING.plan.promo.length; p++) {
+      if (t < PRICING.plan.promo[p].start || t >= PRICING.plan.promo[p].end) continue;
+      for (var pk = 0; pk < PRICING.plan.promo[p].keys.length; pk++) {
+        var kp = PRICING.plan.promo[p].keys[pk];
+        if (PRICING.plan.promo[p].exact ? (m === kp) : (m.indexOf(kp) >= 0)) return PRICING.plan.promo[p].coef;
       }
     }
-    for (var i = 0; i < PRICING.afp.base.length; i++) {
-      for (var j = 0; j < PRICING.afp.base[i].keys.length; j++) {
-        if (m.indexOf(PRICING.afp.base[i].keys[j]) >= 0) return PRICING.afp.base[i].coef;
+    for (var i = 0; i < PRICING.plan.base.length; i++) {
+      for (var j = 0; j < PRICING.plan.base[i].keys.length; j++) {
+        if (m.indexOf(PRICING.plan.base[i].keys[j]) >= 0) return PRICING.plan.base[i].coef;
       }
     }
     return null;
@@ -609,48 +617,51 @@
     }
     return false;
   }
-  // Auto 活动期系数（取 PRICING.afp.promo 里 exact 的 auto 条目；活动期=0.5，期外=null）
+  // Auto 活动期系数（取 PRICING.plan.promo 里 exact 的 auto 条目；活动期=0.5，期外=null）
   function autoPromoCoef() {
     var t = Date.now();
-    for (var p = 0; p < PRICING.afp.promo.length; p++) {
-      if (PRICING.afp.promo[p].exact && PRICING.afp.promo[p].keys.indexOf("auto") >= 0
-        && t >= PRICING.afp.promo[p].start && t < PRICING.afp.promo[p].end) return PRICING.afp.promo[p].coef;
+    for (var p = 0; p < PRICING.plan.promo.length; p++) {
+      if (PRICING.plan.promo[p].exact && PRICING.plan.promo[p].keys.indexOf("auto") >= 0
+        && t >= PRICING.plan.promo[p].start && t < PRICING.plan.promo[p].end) return PRICING.plan.promo[p].coef;
     }
     return null;
   }
   // 系数表的实际下限/上限（随表自动取，不写死漂移）：含基础表与当前生效的活动
-  function afpCoefBounds() {
+  function planCoefBounds() {
     var lo = null, hi = null, t = Date.now();
     function bump(c) { if (c == null) return; if (lo == null || c < lo) lo = c; if (hi == null || c > hi) hi = c; }
-    for (var i = 0; i < PRICING.afp.base.length; i++) bump(PRICING.afp.base[i].coef);
-    for (var p = 0; p < PRICING.afp.promo.length; p++) {
-      if (t >= PRICING.afp.promo[p].start && t < PRICING.afp.promo[p].end) bump(PRICING.afp.promo[p].coef);
+    for (var i = 0; i < PRICING.plan.base.length; i++) bump(PRICING.plan.base[i].coef);
+    for (var p = 0; p < PRICING.plan.promo.length; p++) {
+      if (t >= PRICING.plan.promo[p].start && t < PRICING.plan.promo[p].end) bump(PRICING.plan.promo[p].coef);
     }
     return { lo: lo == null ? 0.25 : lo, hi: hi == null ? 10 : hi };
   }
-  // 只有渠道=方舟套餐时才有 AFP；渠道不对 → null（旧版这里只看模型名）
-  function calcAFP(channel, model, promptTok, completionTok) {
-    if (channel !== "afp") return null;
+  // 只有套餐渠道才有额度；渠道不对 → null（旧版这里只看模型名）
+  // v1.19.0：旧历史数据的渠道名 "afp" 读取时自动归一为 "plan"
+  function calcPlan(channel, model, promptTok, completionTok) {
+    if (channel === "afp") channel = "plan";
+    if (channel !== "plan") return null;
     // 路由别名 = Auto：活动期固定 0.5（官方明示，精确算）；期外无固定值 → 走区间
     if (isAliasModel(model)) {
       var ac = autoPromoCoef();
       if (ac == null) return null;
       return ((promptTok || 0) * ac + (completionTok || 0) * ac) / 10000;
     }
-    var c = afpCoef(model);
+    var c = planCoef(model);
     if (!c) return null;
     return ((promptTok || 0) * c + (completionTok || 0) * c) / 10000;
   }
   // 路由别名在 Auto 活动期结束后：系数未定，只给 [下限, 上限] 参考区间（不假装精确）
-  function calcAFPRange(channel, model, promptTok, completionTok) {
-    if (channel !== "afp" || !isAliasModel(model)) return null;
+  // v1.19.0：旧历史数据渠道名 "afp" 一并认
+  function calcPlanRange(channel, model, promptTok, completionTok) {
+    if ((channel !== "plan" && channel !== "afp") || !isAliasModel(model)) return null;
     if (autoPromoCoef() != null) return null; // 活动期有精确值，不需要区间
-    var b = afpCoefBounds(), n = ((promptTok || 0) + (completionTok || 0));
+    var b = planCoefBounds(), n = ((promptTok || 0) + (completionTok || 0));
     return { lo: n * b.lo / 10000, hi: n * b.hi / 10000, coefLo: b.lo, coefHi: b.hi };
   }
-  function fmtAFPRange(r) {
+  function fmtPlanRange(r) {
     if (!r) return "";
-    return fmtAFP(r.lo) + "~" + fmtAFP(r.hi);
+    return fmtPlan(r.lo) + "~" + fmtPlan(r.hi);
   }
 
   // DeepSeek 官方价格（元/百万 token），2026-09-10 调价后
@@ -678,68 +689,93 @@
     }
     return false;
   }
-  // 泛渠道价表匹配（v1.18.0）：条目须显式带 channel；keys 子串命中即用（条目顺序 = 优先级）
-  function genericTableFor(channel, model) {
+  // 泛渠道条目匹配（v1.19.0 泛化）：条目须显式带 channel；keys 子串/exact 命中即用（条目顺序 = 优先级）。
+  // start/end（UTC 毫秒）可选：限时条目窗口外自动跳过，回退后续条目。
+  function genericEntryFor(channel, model) {
     var g = (PRICING.generic && PRICING.generic.models) || [];
     var m = String(model || "").toLowerCase();
     var ch = String(channel || "").toLowerCase();
+    var t = Date.now();
     for (var i = 0; i < g.length; i++) {
       var it = g[i];
-      if (!it || !it.table || String(it.channel || "").toLowerCase() !== ch) continue;
+      if (!it || String(it.channel || "").toLowerCase() !== ch) continue;
+      if (it.start != null && t < it.start) continue;
+      if (it.end != null && t >= it.end) continue;
       var ks = it.keys || [];
       for (var j = 0; j < ks.length; j++) {
-        if (ks[j] && m.indexOf(String(ks[j]).toLowerCase()) >= 0) return it.table;
+        if (!ks[j]) continue;
+        if (it.exact ? (m === String(ks[j]).toLowerCase()) : (m.indexOf(String(ks[j]).toLowerCase()) >= 0)) return it;
       }
     }
     return null;
   }
-  // 按量计费（v1.18.0 泛化）：deepseek 渠道用官方价表；其他渠道查 PRICING.generic.models
-  // （没配表 → null，不猜）。table 里 cacheHit/peak 可选：缺 cacheHit 按输入价计缓存部分，缺 peak 恒低谷。
+  // 计价（v1.18.0 泛化 / v1.19.0 补完）：deepseek 渠道用官方价表；其他渠道查 PRICING.generic.models
+  // ——条目带 coef → 套餐模式（额度=(入+出)×系数/10000，与 plan 渠道同口径）；带 table → 按量模式
+  // （元/百万；cacheHit/peak 可选：缺 cacheHit 按输入价计缓存部分，缺 peak 恒低谷）。没配条目 → null，不猜。
   function calcCost(channel, model, promptTok, completionTok, cacheHitTok) {
     var ch = String(channel || "");
-    if (!ch) return null;
-    var t = (ch === "deepseek") ? priceTableFor(model) : genericTableFor(ch, model);
-    if (!t || !t.offPeak || t.offPeak.input == null || t.offPeak.output == null) return null;
-    var p = (t.peak && isPeakHour(t)) ? t.peak : t.offPeak;
+    if (ch === "afp") ch = "plan"; // 旧历史数据渠道名兼容
+    if (!ch || ch === "plan") return null; // 套餐渠道的额度走 calcPlan，不在这里
     var pt = promptTok || 0, ct = completionTok || 0;
-    var hit = Math.max(0, Math.min(cacheHitTok || 0, pt));
-    var miss = Math.max(0, pt - hit);
-    var inPrice = (p.cacheHit != null) ? p.cacheHit : p.input;
-    return (hit / 1e6) * inPrice + (miss / 1e6) * p.input + (ct / 1e6) * p.output;
+    var t = (ch === "deepseek") ? priceTableFor(model) : (genericEntryFor(ch, model) || {}).table;
+    if (t && t.offPeak && t.offPeak.input != null && t.offPeak.output != null) {
+      var p = (t.peak && isPeakHour(t)) ? t.peak : t.offPeak;
+      var hit = Math.max(0, Math.min(cacheHitTok || 0, pt));
+      var inPrice = (p.cacheHit != null) ? p.cacheHit : p.input;
+      return (hit / 1e6) * inPrice + (Math.max(0, pt - hit) / 1e6) * p.input + (ct / 1e6) * p.output;
+    }
+    // v1.19.0：套餐模式条目（coef）——任意自定义渠道可按套餐额度计费
+    var e = genericEntryFor(ch, model);
+    if (e && e.coef != null) return ((pt + ct) * e.coef) / 10000;
+    return null;
+  }
+  // 该渠道金额的显示单位（v1.19.0）：plan=套餐额度 / cny=人民币；旧数据无此字段按 cny 显示，零迁移
+  function costUnitFor(channel, model) {
+    var ch = String(channel || "");
+    if (ch === "afp") ch = "plan";
+    if (!ch || ch === "plan") return "";
+    if (ch === "deepseek") return "cny";
+    var e = genericEntryFor(ch, model);
+    return (e && e.coef != null) ? "plan" : "cny";
   }
 
-  // 渠道是否配置过价表（决定"无价表"提示是否出现；v1.18.0 泛化：泛渠道表也算数）
+  // 渠道是否配置过价表（决定"无价表"提示是否出现；v1.18.0 泛化：泛渠道表也算数；v1.19.0 计入 coef 条目）
   function channelHasPriceTable(ch) {
     var c = String(ch || "").toLowerCase();
+    if (c === "afp") c = "plan";
     if (!c) return false;
     if (c === "deepseek") return true;
+    if (c === "plan") return false; // 套餐渠道走 coefMissing 提示，不算"无价表"
     var g = (PRICING.generic && PRICING.generic.models) || [];
     for (var i = 0; i < g.length; i++) {
-      if (g[i] && String(g[i].channel || "").toLowerCase() === c) return true;
+      if (g[i] && String(g[i].channel || "").toLowerCase() === c && (g[i].table || g[i].coef != null)) return true;
     }
     return false;
   }
 
   // 金额相关字段（bar/面板/实时快照共用一份口径，避免三处漂移）
+  // v1.19.0：channel 入参先归一（旧历史数据 "afp" → "plan"）再查价；新增 costUnit 供 UI 选单位
   function moneyFields(channel, model, promptTok, completionTok, cacheHitTok) {
     var ch = channel || "";
-    var cost = calcCost(ch, model, promptTok, completionTok, cacheHitTok);
-    var afp = calcAFP(ch, model, promptTok, completionTok);
+    var chN = (ch === "afp") ? "plan" : ch;
+    var cost = calcCost(chN, model, promptTok, completionTok, cacheHitTok);
+    var afp = calcPlan(chN, model, promptTok, completionTok);
     var alias = isAliasModel(model);
-    var afpRange = calcAFPRange(ch, model, promptTok, completionTok);
+    var afpRange = calcPlanRange(chN, model, promptTok, completionTok);
     return {
       channel: ch,
       afp: afp,
       cost: cost,
+      costUnit: costUnitFor(chN, model),
       aliasModel: alias,
       afpLo: afpRange ? afpRange.lo : null,
       afpHi: afpRange ? afpRange.hi : null,
       // 路由别名：算不出具体值（别名为真且无精确系数）→ 用区间，不再笼统报"系数未知"
       coefRange: !!afpRange,
-      // 渠道=方舟套餐但模型不在系数表且不是路由别名 → 面板提示"系数未知"
-      coefMissing: ch === "afp" && afp == null && !afpRange,
-      // 渠道=DeepSeek 官方但没这模型的价表 → 面板提示"无价表"
-              priceMissing: channelHasPriceTable(ch) && cost == null,
+      // 渠道=套餐但模型不在系数表且不是路由别名 → 面板提示"系数未知"
+      coefMissing: chN === "plan" && afp == null && !afpRange,
+      // 渠道配过价表但这模型算不出钱 → 面板提示"无价表"
+      priceMissing: channelHasPriceTable(chN) && cost == null,
       provider: (activeLlm && activeLlm.providerId) || ""
     };
   }
@@ -1317,7 +1353,8 @@
       modelWaitSec: (st.modelWaitMs + (st.toolResumeAt ? Math.max(0, now() - st.toolResumeAt) : 0)) / 1000,
       channel: _ch,
       cost: calcCost(_ch, st.model, st.promptTokens, _costTok, st.cacheHitTokens),
-      afp: calcAFP(_ch, st.model, st.promptTokens, _costTok)
+      costUnit: costUnitFor(_ch, st.model),
+      afp: calcPlan(_ch, st.model, st.promptTokens, _costTok)
     };
   }
 
@@ -1382,7 +1419,7 @@
     }
     // v1.8.0 计费渠道：usage.provider_id（本回合真值）→ /api/models/active（当前配置）
     // → 本会话上一回合的记忆 → 模型名兜底（只对 deepseek 名敢下结论）。全拿不到就留空：
-    // 面板显示"渠道未识别"，宁可不出金额，也不再按模型名瞎猜出个 AFP
+    // 面板显示"渠道未识别"，宁可不出金额，也不再按模型名瞎猜出个错金额
     var _ch = currentChannel(st.providerUsage);
     if (!_ch.channel) {
       var _pr = loadLastResult(st.__sid);
@@ -1513,7 +1550,7 @@
     // 费用 output 侧优先精确 completion_tokens；usage 脏（非物理）时回退估算
     var costCompletion = (st.finalUsage && st.finalUsage.completionTokens >= 0 && !implausible)
       ? st.finalUsage.completionTokens : st.tokenCount + st.toolTokens + (st.replayTokens || 0);
-    // v1.8.0：金额口径统一走 moneyFields（渠道决定 AFP 还是人民币，互斥）
+    // v1.8.0：金额口径统一走 moneyFields（渠道决定套餐额度还是人民币，互斥）
     var _money = moneyFields(st.channel, st.model, st.promptTokens, costCompletion, st.cacheHitTokens);
     st.lastResult = {
       ts: Date.now(),
@@ -1538,6 +1575,7 @@
       promptTokens: st.promptTokens || 0,
       costTokens: costCompletion,
       cost: _money.cost,
+      costUnit: _money.costUnit,
       afp: _money.afp,
       channel: _money.channel,
       channelSrc: st.channelSrc || "",
@@ -1919,7 +1957,7 @@
       total: usage.total, promptTokens: usage.promptTokens, costTokens: usage.generated,
       cacheHit: usage.cacheHit, cacheMiss: Math.max(0, usage.promptTokens - usage.cacheHit),
       model: usage.model, provider: usage.provider, channel: channel.channel, channelSrc: "usage",
-      cost: money.cost, afp: money.afp, coefMissing: money.coefMissing, priceMissing: money.priceMissing,
+      cost: money.cost, costUnit: money.costUnit, afp: money.afp, coefMissing: money.coefMissing, priceMissing: money.priceMissing,
       aliasModel: money.aliasModel, coefRange: money.coefRange, afpLo: money.afpLo, afpHi: money.afpHi,
       status: aborted ? "abort" : DONE, endCause: aborted ? "user_stop" : "history", errMsg: "",
       ttft: 0, seconds: isFinite(start) && isFinite(end) && end >= start ? (end - start) / 1000 : 0,
@@ -1934,7 +1972,7 @@
   // v1.8.0：渠道证据是异步到的（/api/models/active、/api/models）。证据到手后把
   // 正在跑的回合与"当前会话最后一条结果"就地重算一遍金额，避免用户看到空着或写错的
   // 金额（v1.7 老结果没有 channelSrc，rank=0，会被更强证据修正掉——用户这次看到的
-  // 错 AFP 就属于这一类）
+  // 错金额就属于这一类）
   function channelRank(src) {
     if (src === "usage") return 3;
     if (src === "active") return 2;
@@ -1989,6 +2027,7 @@
       r.aliasModel = money.aliasModel;
       r.afpLo = money.afpLo;
       r.afpHi = money.afpHi;
+      r.costUnit = money.costUnit;
       r.coefRange = money.coefRange;
       saveLastResult(sid2, r);
       refreshBarContent();
@@ -2141,9 +2180,9 @@
     return barState("连接中") + '<span class="qp-ts-label">等待首字到达…</span>';
   }
 
-  // v1.8.0：渠道文案（面板 chip + hover 说明）。AFP 是黑话，正文一律说人话
+  // v1.8.0：渠道文案（面板 chip + hover 说明），正文一律说人话；v1.19.0：代号 plan（旧值 afp 兼容显示）
   function channelLabel(ch) {
-    if (ch === "afp") return "方舟套餐";
+    if (ch === "plan" || ch === "afp") return "套餐渠道";
     if (ch === "coding") return "Coding Plan";
     if (ch === "deepseek") return "DeepSeek 官方";
     if (ch === "other") return "其他渠道";
@@ -2151,10 +2190,10 @@
   }
   function channelTip(ch, provider) {
     var head = "计费渠道：" + channelLabel(ch) + (provider ? "（" + provider + "）" : "") + "。";
-    if (ch === "afp") return head + "走火山方舟 Agent Plan 套餐，按 AFP 点数抵扣——同一个模型名在 DeepSeek 官方是按量付费，两者互斥，所以只能按渠道判";
-    if (ch === "coding") return head + "走火山方舟 Coding Plan（地址 /api/coding/v3），按请求次数计、不是 token/AFP，个人版无公开用量 API → 本插件只报 token，不报金额";
+    if (ch === "plan" || ch === "afp") return head + "走套餐（Agent Plan）渠道，按套餐额度抵扣——同一个模型名在按量渠道是人民币计费，两边计费方式互斥，所以只能按渠道判";
+    if (ch === "coding") return head + "走 Coding Plan 渠道（地址 /api/coding/v3），按请求次数计、不是 token/额度，个人版无公开用量 API → 本插件只报 token，不报金额";
     if (ch === "deepseek") return head + "走 DeepSeek 官方 API，按人民币计价（尖峰/低谷单价不同）";
-    if (ch === "other") return head + "既不是方舟套餐也不是 DeepSeek 官方，本插件没有该渠道价表 → 只报 token，不报金额";
+    if (ch === "other") return head + "不是套餐/DeepSeek 官方这类内置价目渠道，本插件没有该渠道价表 → 只报 token，不报金额（可在覆盖层配 generic 价目）";
     return head + "拿不到 provider 信息（usage.provider_id 为空、/api/models/active 也读不到）→ 只报 token，不报金额。宁可空着，也不按模型名猜一个错数";
   }
 
@@ -2321,9 +2360,11 @@
       row("输入 + 输出", r.total ? fmtNum(r.total) + " tok" : "—", "后端本轮累计总用量，不等于新增输出量") +
       row("工具参数 · 含在输出内", r.toolTokens > 0 ? "≈" + fmtNum(r.toolTokens) + " tok" : "—", "工具参数是输出的一部分；拆分量为校准后的估算，不与输出总量重复相加") +
       row("缓存命中 · 含在输入内", r.cacheHit > 0 ? fmtNum(r.cacheHit) + " tok" : "—");
-    if (r.afp != null && r.afp > 0) usage += row("套餐抵扣", fmtAFP(r.afp) + " AFP", channelTip(r.channel, r.provider)) + row("其中缓存重计", rebillNote(r.channel, r.cacheHit, r.model).replace(/[（）]/g, '').replace('缓存重计 ', '') || "—");
-    if (r.cost != null) usage += row("费用", fmtMoney(r.cost, "¥"), channelTip(r.channel, r.provider));
-    if (r.coefRange && r.afpLo != null) usage += row("套餐抵扣 · 参考", fmtAFPRange({lo:r.afpLo,hi:r.afpHi}), ALIAS_TIP);
+    if (r.afp != null && r.afp > 0) usage += row("套餐抵扣", fmtPlan(r.afp) + " 额度", channelTip(r.channel, r.provider)) + row("其中缓存重计", rebillNote(r.channel, r.cacheHit, r.model).replace(/[（）]/g, '').replace('缓存重计 ', '') || "—");
+    if (r.cost != null) usage += r.costUnit === "plan"
+      ? row("套餐抵扣", fmtMoney(r.cost, "") + " 额度", channelTip(r.channel, r.provider))
+      : row("费用", fmtMoney(r.cost, "¥"), channelTip(r.channel, r.provider));
+    if (r.coefRange && r.afpLo != null) usage += row("套餐抵扣 · 参考", fmtPlanRange({lo:r.afpLo,hi:r.afpHi}), ALIAS_TIP);
     if (r.coefMissing || r.priceMissing || !r.channel) usage += row("计费", r.coefMissing ? "系数未知" : r.priceMissing ? "无价表" : "渠道未识别", channelTip(r.channel,r.provider));
     var observed = !r.historyOnly && speed > 0;
     var speedNote = r.historyOnly ? "历史仅恢复用量，未观测生成速度" : r.attached ? "仅统计接入后有效生成，回放不计速" : "排除首字、工具等待及缓冲冲刷";
@@ -2424,6 +2465,7 @@
       segments: segs, cacheHit: st.cacheHitTokens || 0,
       cost: _money.cost,
       afp: _money.afp,
+      costUnit: _money.costUnit,
       channel: _money.channel,
       channelSrc: st.channelSrc || "",
       provider: st.provider || _money.provider,

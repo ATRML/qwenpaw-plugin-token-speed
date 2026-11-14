@@ -1,7 +1,7 @@
 {
   "id": "token-speed",
   "name": "Token 实时速度",
-  "version": "1.18.0",
+  "version": "1.19.0",
   "type": "general",
   "description": "清晰展示实时生成速度、本轮输出、分项耗时与用量计费。区分观测估算与后端用量，支持会话切换恢复。",
   "author": "ATRML",

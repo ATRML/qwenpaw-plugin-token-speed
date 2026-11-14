@@ -9,7 +9,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 HEADER = """/**
  * QwenPaw 插件：Token 实时速度（前端核心）
  * - 拦截聊天 SSE 流（POST /api/console/chat，响应为 text/event-stream）
- * - 统计：首字延迟 TTFT、实时 token 速度、本轮 token 总量、耗时、工具等待、费用（AFP/人民币）
+ * - 统计：首字延迟 TTFT、实时 token 速度、本轮 token 总量、耗时、工具等待、费用（套餐额度/人民币）
  * - 显示为固定悬浮条（输入框上方），不进入 React 管理树；点击悬浮条展开详情面板
  *   （大号分段速度折线图 + 分段明细 + 完整汇总）
  *

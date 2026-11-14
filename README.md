@@ -7,7 +7,7 @@
 - **实时速度**：拦截聊天 SSE 流逐片计时，实时 tokens/s；区分"真流式解码"与"网关补发/中途接入回放"，避免峰值虚高
 - **首字延迟（TTFT）**：从请求发出到第一个 token 到达的耗时
 - **分段明细与折线图**：语义分段展示每段速度曲线，峰值与均值一目了然
-- **用量与计费**：本轮输出 tokens、分项耗时、费用估算（区分前端观测估算与后端官方用量），按内置价目表计算（AFP / 人民币）
+- **用量与计费**：本轮输出 tokens、分项耗时、费用估算（区分前端观测估算与后端官方用量），按内置价目表计算（套餐额度 / 人民币）
 - **会话切换恢复**：切换会话后可恢复当前轮统计；页面刷新后能识别"中途接入"的回合
 - **防御性统计口径**：工具调用参数计入 token、批量冲刷（flush）剔除、静默补发识别
 
@@ -33,7 +33,34 @@ python build.py
 
 依赖：Python 3（拼接）+ Node.js（仅用于生成后语法校验）。无打包器。
 
-调整价目/系数只需改 `src/06-pricing.js` 顶部的 `PRICING` 静态数据区。
+调整价目/系数只需改 `src/06-pricing.js` 顶部的 `PRICING` 静态数据区；不改源码也能在运行时覆盖（见下）。
+
+## 自定义计价
+
+任意第三方渠道（中转/私有网关）都能接全套计价，纯数据配置。把一份 JSON 写入 `localStorage["qp_token_speed_pricing"]` 后刷新即可生效：
+
+```js
+localStorage.setItem("qp_token_speed_pricing", JSON.stringify({
+  // 1) provider 证据 → 渠道名（provider_id / base_url 命中子串即判入该渠道）
+  customChannels: [{ keys: ["my-relay.com"], channel: "my-relay" }],
+  // 2) 渠道名 → 价目条目（顺序即优先级，可混用按量/套餐/限时窗口）
+  generic: { models: [
+    // 按量（元/百万 token，可选 peak/peakHours/weekendOffPeak/cacheHit）
+    { channel: "my-relay", keys: ["gpt-x"], table: { offPeak: { input: 10, output: 30 } } },
+    // 套餐（额度 = (输入+输出)×系数/10000，unit:"plan" 让面板按"额度"显示）
+    { channel: "my-relay", keys: ["bundled-model"], coef: 2.5, unit: "plan" },
+    // 限时活动（UTC 毫秒窗口，过期自动跳过回退下一条）
+    { channel: "my-relay", keys: ["promo-model"], coef: 0.5, unit: "plan",
+      start: Date.UTC(2026, 10, 1), end: Date.UTC(2026, 11, 1) }
+  ]},
+  // 3) 内置套餐渠道补模型/调价（plan.base/plan.promo 前置合并，旧键名 afp.* 也兼容）
+  plan: { base: [{ keys: ["my-private-model"], coef: 1.5 }] }
+}));
+```
+
+- 未配置价表的渠道只报 token 不报金额（不猜数）；配置了价目后详情面板自动显示"费用/套餐抵扣"。
+- 覆盖层解析失败或结构不对时整份忽略（console.warn），内置价目原样生效，绝不崩面板。
+- 删除该 localStorage 键即恢复内置价目。
 
 ## 目录结构
 

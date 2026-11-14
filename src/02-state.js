@@ -38,7 +38,7 @@
       lastSpeed: 0, replayEndSeen: false,
       // v1.8.0 计费渠道与收尾取证
       providerUsage: "",   // 本回合 SSE usage 里带的 provider_id（最准证据）
-      channel: "",         // afp / deepseek / other / ""（未识别）
+      channel: "",         // plan / deepseek / other / ""（未识别）
       channelSrc: "",      // usage / active / model / memory（证据强度排序用）
       provider: "",        // 用于显示的渠道来源（provider_id）
       endCause: "",        // stream_end / error_frame / read_error / user_stop

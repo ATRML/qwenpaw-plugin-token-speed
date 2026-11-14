@@ -241,7 +241,7 @@
       total: usage.total, promptTokens: usage.promptTokens, costTokens: usage.generated,
       cacheHit: usage.cacheHit, cacheMiss: Math.max(0, usage.promptTokens - usage.cacheHit),
       model: usage.model, provider: usage.provider, channel: channel.channel, channelSrc: "usage",
-      cost: money.cost, afp: money.afp, coefMissing: money.coefMissing, priceMissing: money.priceMissing,
+      cost: money.cost, costUnit: money.costUnit, afp: money.afp, coefMissing: money.coefMissing, priceMissing: money.priceMissing,
       aliasModel: money.aliasModel, coefRange: money.coefRange, afpLo: money.afpLo, afpHi: money.afpHi,
       status: aborted ? "abort" : DONE, endCause: aborted ? "user_stop" : "history", errMsg: "",
       ttft: 0, seconds: isFinite(start) && isFinite(end) && end >= start ? (end - start) / 1000 : 0,
@@ -256,7 +256,7 @@
   // v1.8.0：渠道证据是异步到的（/api/models/active、/api/models）。证据到手后把
   // 正在跑的回合与"当前会话最后一条结果"就地重算一遍金额，避免用户看到空着或写错的
   // 金额（v1.7 老结果没有 channelSrc，rank=0，会被更强证据修正掉——用户这次看到的
-  // 错 AFP 就属于这一类）
+  // 错金额就属于这一类）
   function channelRank(src) {
     if (src === "usage") return 3;
     if (src === "active") return 2;
@@ -311,6 +311,7 @@
       r.aliasModel = money.aliasModel;
       r.afpLo = money.afpLo;
       r.afpHi = money.afpHi;
+      r.costUnit = money.costUnit;
       r.coefRange = money.coefRange;
       saveLastResult(sid2, r);
       refreshBarContent();

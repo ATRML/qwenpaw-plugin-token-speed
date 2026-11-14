@@ -38,22 +38,23 @@
     if (v == null || !isFinite(v)) return "-";
     return (unit || "") + (v >= 0.01 ? v.toFixed(4) : v.toFixed(6));
   }
-  function fmtAFP(v) {
+  function fmtPlan(v) {
     if (v == null || !isFinite(v)) return "-";
     return v >= 0.05 ? v.toFixed(2) : v.toFixed(4);
   }
 
-  // v1.5.0：缓存重计标注（v1.8.0 起只在渠道=方舟套餐时显示——缓存重计是 Agent Plan
-  // 的计费规则，人民币渠道按缓存价另算，不适用）。实测（2026-09-16 对账）：Agent Plan
-  // 缓存命中按全额系数重复计费——5小时窗实际扣费 1290.33 ≈ 全额公式预测 1440；大上下文
-  // 回合 90%+ 的 AFP 来自缓存重计（27步回合：1271.56 里 1177 是重计）
+  // v1.5.0：缓存重计标注（v1.8.0 起只在套餐渠道显示——缓存重计是套餐计费规则，人民币
+  // 渠道按缓存价另算，不适用）。实测（2026-09-16 对账）：套餐缓存命中按全额系数重复计费
+  // ——5小时窗实际扣费 1290.33 ≈ 全额公式预测 1440；大上下文回合 90%+ 的套餐额度来自缓存
+  // 重计（27步回合：1271.56 里 1177 是重计）
+  // v1.19.0：旧历史数据渠道名 "afp" 一并认（新代号 "plan"）
   function rebillNote(channel, cacheHitTok, model) {
-    if (channel !== "afp") return "";
-    var c = afpCoef(model);
+    if (channel !== "plan" && channel !== "afp") return "";
+    var c = planCoef(model);
     if (!c || !cacheHitTok || cacheHitTok <= 0) return "";
     var rebill = cacheHitTok * c / 10000;
     if (rebill < 0.05) return "";
-    return "（缓存重计 " + fmtAFP(rebill) + "）";
+    return "（缓存重计 " + fmtPlan(rebill) + "）";
   }
 
   // 历史结果距今的相对时间（>10 分钟且有可靠 ts 才显示；

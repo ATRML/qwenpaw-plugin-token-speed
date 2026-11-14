@@ -36,7 +36,8 @@
       modelWaitSec: (st.modelWaitMs + (st.toolResumeAt ? Math.max(0, now() - st.toolResumeAt) : 0)) / 1000,
       channel: _ch,
       cost: calcCost(_ch, st.model, st.promptTokens, _costTok, st.cacheHitTokens),
-      afp: calcAFP(_ch, st.model, st.promptTokens, _costTok)
+      costUnit: costUnitFor(_ch, st.model),
+      afp: calcPlan(_ch, st.model, st.promptTokens, _costTok)
     };
   }
 
@@ -101,7 +102,7 @@
     }
     // v1.8.0 计费渠道：usage.provider_id（本回合真值）→ /api/models/active（当前配置）
     // → 本会话上一回合的记忆 → 模型名兜底（只对 deepseek 名敢下结论）。全拿不到就留空：
-    // 面板显示"渠道未识别"，宁可不出金额，也不再按模型名瞎猜出个 AFP
+    // 面板显示"渠道未识别"，宁可不出金额，也不再按模型名瞎猜出个错金额
     var _ch = currentChannel(st.providerUsage);
     if (!_ch.channel) {
       var _pr = loadLastResult(st.__sid);
@@ -232,7 +233,7 @@
     // 费用 output 侧优先精确 completion_tokens；usage 脏（非物理）时回退估算
     var costCompletion = (st.finalUsage && st.finalUsage.completionTokens >= 0 && !implausible)
       ? st.finalUsage.completionTokens : st.tokenCount + st.toolTokens + (st.replayTokens || 0);
-    // v1.8.0：金额口径统一走 moneyFields（渠道决定 AFP 还是人民币，互斥）
+    // v1.8.0：金额口径统一走 moneyFields（渠道决定套餐额度还是人民币，互斥）
     var _money = moneyFields(st.channel, st.model, st.promptTokens, costCompletion, st.cacheHitTokens);
     st.lastResult = {
       ts: Date.now(),
@@ -257,6 +258,7 @@
       promptTokens: st.promptTokens || 0,
       costTokens: costCompletion,
       cost: _money.cost,
+      costUnit: _money.costUnit,
       afp: _money.afp,
       channel: _money.channel,
       channelSrc: st.channelSrc || "",
