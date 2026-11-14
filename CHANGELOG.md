@@ -1,3 +1,11 @@
+# v1.18.0 — 2026-11-14：计费开放（运行时覆盖层 + 泛渠道价表）
+
+- 运行时覆盖层：localStorage["qp_token_speed_pricing"] 放一份 JSON 就能加模型/调价/接渠道，不用改源码重建。用户条目合并进价目表且优先命中；JSON 解析失败或结构不对整份忽略并 console.warn，内置价目原样生效，绝不崩面板。支持 afp.base/afp.promo、deepseek.models/peakHours/weekendOffPeak、alias.keys 前置合并，generic.models/customChannels 整体注入。
+- 泛渠道价表 PRICING.generic.models：{ channel, keys, table }，任意渠道配了表就按量算钱，详情面板自动显示"费用"（UI 零改动）。table 的 peak/peakHours/weekendOffPeak/cacheHit 全部可选：缺 peak 恒低谷、缺 cacheHit 缓存部分按输入价计。
+- 自定义渠道映射 PRICING.customChannels：{ keys:[provider_id/base_url 子串], channel }，resolveChannel 在内置判定之后、other 之前匹配。
+- 清理对其他本地插件的引用文案（孪生实现警告改为中性提醒），公开仓库不再出现私有插件名。
+- 兼容性：默认配置下 afp/deepseek/coding/other 全路径行为与 v1.17.0 逐位一致；"无价表"提示只在渠道确实配过价表时出现，coding 等无表渠道保持静默。
+
 # v1.17.0 — 2026-10-18：展示层重做
 
 - 悬浮条收敛为状态、速度、输出与耗时，费用移入详情。
@@ -242,4 +250,4 @@ plugin_call/output 帧本轮只作"流还活着"的心跳；语义分段（用�
 - v1.13.2（2026-09-17）：纯结构重构，零行为变化——价目表/系数表/活动窗口/高峰时段/
 别名文案全部摘出进统一的 PRICING 静态数据区（{ keys:[模型名子串], ... } 形态）：
 以后调价只改 PRICING 一块，新增模型 = 加一条 { keys, coef/table }，逻辑代码不用碰；
-高峰时段规则也进了数据区（与 deepseek-balance 的孪生实现警告随表走）。
+高峰时段规则也进了数据区。

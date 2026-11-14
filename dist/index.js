@@ -16,7 +16,7 @@
   if (window.__qpTokenSpeedLoaded) return;
   window.__qpTokenSpeedLoaded = true;
 
-  window.__qpTokenSpeedVersion = "1.17.0";
+  window.__qpTokenSpeedVersion = "1.18.0";
 
   // ════════════════════════════════════════════════════════════
   // 01-core.js · 基础常量 / 页面离开标记 / 会话 ID / 结果持久化
@@ -348,6 +348,10 @@
     if (/\/api\/coding(\/|$)/.test(bu) || /coding[_\-]?plan/.test(pid)) return "coding";
     if (/agentplan|agent-plan|agent_plan/.test(pid) || /\/api\/plan\//.test(bu)) return "afp";
     if (pid === "deepseek" || pid.indexOf("deepseek") >= 0 || bu.indexOf("deepseek.com") >= 0) return "deepseek";
+    // v1.18.0：自定义渠道映射（纯数据：PRICING.customChannels，可经 localStorage 覆盖层注入）——
+    // provider_id/base_url 命中子串 → 返回配置的渠道名；没配置/没命中照旧落 other
+    var _cc = customChannelOf(pid, bu);
+    if (_cc) return _cc;
     if (pid) return "other";
     return "";
   }
@@ -463,6 +467,13 @@
   //   PRICING.deepseek.models     DeepSeek 官方价表（元/百万 token：offPeak/peak × cacheHit/input/output）
   //   PRICING.deepseek.peakHours  高峰时段（本地时间闭开区间，周末全天低谷）
   //   PRICING.alias               路由别名（控制台 Auto）：keys + 悬浮提示文案
+  //   PRICING.generic.models      泛渠道价表（v1.18.0）：{ channel, keys, table }，任意渠道配表即按量算钱、
+  //                               UI 自动显示"费用"；table 的 peak/peakHours/weekendOffPeak/cacheHit 全部可选
+  //                               （缺 peak 恒低谷、缺 cacheHit 缓存部分按输入价计）
+  //   PRICING.customChannels      自定义渠道映射（v1.18.0）：{ keys:[provider_id/base_url 子串], channel:"渠道名" }
+  // 运行时覆盖层（v1.18.0）：localStorage["qp_token_speed_pricing"] 放一份 JSON 即可加模型/调价/接渠道，
+  //   不用改源码重建；用户条目合并进对应表且排在最前（优先命中），解析/结构异常整份忽略并 console.warn，
+  //   内置表原样生效。
   // 数据来源：官方计费规格文档（对拍示例：seed-2.1-turbo 50k入/0.5k出 → 12.625 AFP）
   //          + 官方核对文档 2026-09-16 + DeepSeek 2026-09-10 调价
   // 原则：没对拍过/官方没公布的，宁可不加（面板显示"系数未知/无价表"），不猜数。
@@ -491,8 +502,7 @@
       ]
     },
     // —— DeepSeek 官方按量（人民币）。只有对拍过的模型才入表，其余不显示金额（不猜）
-    // ⚠️ 孪生实现警告：deepseek-balance 插件 plugin.py 的 _is_peak_hour 与下面 peakHours
-    //    是同一套规则的两份拷贝——DeepSeek 调价/调时段时必须两处同步改
+    // 注意：若你在其他脚本里拷贝过这份时段规则，调价/调时段时记得几处同步
     deepseek: {
       models: [
         { keys: ["flash"], table: { offPeak: { cacheHit: 0.02, input: 1, output: 4 }, peak: { cacheHit: 0.04, input: 2, output: 8 } } }
@@ -508,8 +518,67 @@
         + "请求和用量里只带这个别名。Auto 在活动期（2026-06-10～11-08）固定按系数 0.5 抵扣，"
         + "与底层路由到哪个模型无关；活动结束后官方系数未定，届时插件会只给参考区间。"
         + "想要始终精确显示，把模型名写成具体的（如 glm-5.3 / deepseek-v4-flash），别用别名"
-    }
+    },
+    // —— 泛渠道价表（v1.18.0）：第三方渠道配了表就按量算钱（覆盖层可整体注入）
+    generic: { models: [] },
+    // —— 自定义渠道映射（v1.18.0）：resolveChannel 在内置判定后、other 前查这张表
+    customChannels: []
   };
+  // v1.18.0 · 运行时覆盖层：localStorage["qp_token_speed_pricing"] 放一份 JSON 即可加模型/调价/接渠道，
+  // 不用改源码重建。用户条目合并进对应表并排在最前（优先命中）；JSON 解析失败/结构不对 → 整份忽略并
+  // console.warn，内置表原样生效，绝不因此崩面板。支持字段：
+  //   afp.base / afp.promo / deepseek.models（数组，前置合并）、deepseek.peakHours（替换）、
+  //   deepseek.weekendOffPeak（替换）、alias.keys（前置合并）、generic.models / customChannels（整体提供）
+  (function applyPricingOverlay() {
+    var raw = null;
+    try { raw = localStorage.getItem("qp_token_speed_pricing"); } catch (e) { return; }
+    if (!raw) return;
+    var u = null;
+    try { u = JSON.parse(raw); } catch (e) { console.warn("[token-speed] pricing 覆盖层不是合法 JSON，已忽略"); return; }
+    if (!u || typeof u !== "object") return;
+    function entryArr(a) {
+      if (Object.prototype.toString.call(a) !== "[object Array]") return false;
+      for (var i = 0; i < a.length; i++) {
+        if (!a[i] || typeof a[i] !== "object" || Object.prototype.toString.call(a[i].keys) !== "[object Array]") return false;
+      }
+      return true;
+    }
+    // promo 额外要求 start/end/coef 为数字（缺窗口的活动条目会永久生效，必须拦下）
+    function promoArr(a) {
+      if (!entryArr(a)) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (typeof a[i].start !== "number" || typeof a[i].end !== "number" || typeof a[i].coef !== "number") return false;
+      }
+      return true;
+    }
+    try {
+      if (u.afp && entryArr(u.afp.base)) PRICING.afp.base = u.afp.base.concat(PRICING.afp.base);
+      if (u.afp && promoArr(u.afp.promo)) PRICING.afp.promo = u.afp.promo.concat(PRICING.afp.promo);
+      if (u.deepseek && entryArr(u.deepseek.models)) PRICING.deepseek.models = u.deepseek.models.concat(PRICING.deepseek.models);
+      if (u.deepseek && Object.prototype.toString.call(u.deepseek.peakHours) === "[object Array]") PRICING.deepseek.peakHours = u.deepseek.peakHours;
+      if (u.deepseek && typeof u.deepseek.weekendOffPeak === "boolean") PRICING.deepseek.weekendOffPeak = u.deepseek.weekendOffPeak;
+      if (u.alias && entryArr(u.alias.keys)) PRICING.alias.keys = u.alias.keys.concat(PRICING.alias.keys);
+      if (u.generic && entryArr(u.generic.models)) PRICING.generic.models = u.generic.models;
+      if (entryArr(u.customChannels)) PRICING.customChannels = u.customChannels;
+    } catch (e) { console.warn("[token-speed] pricing 覆盖层应用失败，使用内置价目", e); }
+  })();
+
+  // 自定义渠道映射：PRICING.customChannels = [{ keys:[provider_id/base_url 子串], channel:"渠道名" }]
+  // （05-channel.js 的 resolveChannel 在内置判定之后、other 之前调用；没配置/没命中 → 空串照旧）
+  function customChannelOf(pid, bu) {
+    if (typeof PRICING === "undefined" || !PRICING.customChannels || !PRICING.customChannels.length) return "";
+    var hay = (String(pid || "") + "\n" + String(bu || "")).toLowerCase();
+    for (var i = 0; i < PRICING.customChannels.length; i++) {
+      var it = PRICING.customChannels[i];
+      if (!it || !it.channel) continue;
+      var ks = it.keys || [];
+      for (var j = 0; j < ks.length; j++) {
+        if (ks[j] && hay.indexOf(String(ks[j]).toLowerCase()) >= 0) return String(it.channel);
+      }
+    }
+    return "";
+  }
+
   function afpCoef(model) {
     if (!model) return null;
     var m = String(model).toLowerCase();
@@ -585,9 +654,7 @@
   }
 
   // DeepSeek 官方价格（元/百万 token），2026-09-10 调价后
-  // ⚠️ 孪生实现警告：deepseek-balance 插件 plugin.py 的 _is_peak_hour 与这里的
-  // 高峰时段规则（工作日 9-12/14-18/20-23）是同一套规则的两份拷贝——DeepSeek
-  // 调价时必须两处同步改
+  // 注意：若你在其他脚本里拷贝过这份高峰时段规则（工作日 9-12/14-18/20-23），调价/调时段时记得几处同步
   // 价表本体在 PRICING.deepseek.models（价目表统一摘在那里）；这里只留匹配与时段逻辑
   function priceTableFor(model) {
     var m = String(model || "").toLowerCase();
@@ -598,25 +665,59 @@
     }
     return null;
   }
-  function isPeakHour() {
+  // 高峰判定（v1.18.0 泛化）：传了带 peakHours 的表就按表的时段；否则用 DeepSeek 全局规则。
+  // 带 peak 价的表必须同时带 peakHours，否则会落到 DeepSeek 时段（结构约定见文件头）。
+  function isPeakHour(t) {
     var n = new Date();
     var h = n.getHours(), wd = n.getDay(); // 0=周日
-    if (PRICING.deepseek.weekendOffPeak && (wd === 0 || wd === 6)) return false;
-    for (var i = 0; i < PRICING.deepseek.peakHours.length; i++) {
-      if (h >= PRICING.deepseek.peakHours[i][0] && h < PRICING.deepseek.peakHours[i][1]) return true;
+    var ph = (t && t.peakHours) ? t.peakHours : PRICING.deepseek.peakHours;
+    var weekendOff = (t && typeof t.weekendOffPeak === "boolean") ? t.weekendOffPeak : PRICING.deepseek.weekendOffPeak;
+    if (weekendOff && (wd === 0 || wd === 6)) return false;
+    for (var i = 0; i < ph.length; i++) {
+      if (h >= ph[i][0] && h < ph[i][1]) return true;
     }
     return false;
   }
-  // 只有渠道=DeepSeek 官方 且 有该模型价表时才计人民币
+  // 泛渠道价表匹配（v1.18.0）：条目须显式带 channel；keys 子串命中即用（条目顺序 = 优先级）
+  function genericTableFor(channel, model) {
+    var g = (PRICING.generic && PRICING.generic.models) || [];
+    var m = String(model || "").toLowerCase();
+    var ch = String(channel || "").toLowerCase();
+    for (var i = 0; i < g.length; i++) {
+      var it = g[i];
+      if (!it || !it.table || String(it.channel || "").toLowerCase() !== ch) continue;
+      var ks = it.keys || [];
+      for (var j = 0; j < ks.length; j++) {
+        if (ks[j] && m.indexOf(String(ks[j]).toLowerCase()) >= 0) return it.table;
+      }
+    }
+    return null;
+  }
+  // 按量计费（v1.18.0 泛化）：deepseek 渠道用官方价表；其他渠道查 PRICING.generic.models
+  // （没配表 → null，不猜）。table 里 cacheHit/peak 可选：缺 cacheHit 按输入价计缓存部分，缺 peak 恒低谷。
   function calcCost(channel, model, promptTok, completionTok, cacheHitTok) {
-    if (channel !== "deepseek") return null;
-    var t = priceTableFor(model);
-    if (!t) return null;
-    var p = isPeakHour() ? t.peak : t.offPeak;
+    var ch = String(channel || "");
+    if (!ch) return null;
+    var t = (ch === "deepseek") ? priceTableFor(model) : genericTableFor(ch, model);
+    if (!t || !t.offPeak || t.offPeak.input == null || t.offPeak.output == null) return null;
+    var p = (t.peak && isPeakHour(t)) ? t.peak : t.offPeak;
     var pt = promptTok || 0, ct = completionTok || 0;
     var hit = Math.max(0, Math.min(cacheHitTok || 0, pt));
     var miss = Math.max(0, pt - hit);
-    return (hit / 1e6) * p.cacheHit + (miss / 1e6) * p.input + (ct / 1e6) * p.output;
+    var inPrice = (p.cacheHit != null) ? p.cacheHit : p.input;
+    return (hit / 1e6) * inPrice + (miss / 1e6) * p.input + (ct / 1e6) * p.output;
+  }
+
+  // 渠道是否配置过价表（决定"无价表"提示是否出现；v1.18.0 泛化：泛渠道表也算数）
+  function channelHasPriceTable(ch) {
+    var c = String(ch || "").toLowerCase();
+    if (!c) return false;
+    if (c === "deepseek") return true;
+    var g = (PRICING.generic && PRICING.generic.models) || [];
+    for (var i = 0; i < g.length; i++) {
+      if (g[i] && String(g[i].channel || "").toLowerCase() === c) return true;
+    }
+    return false;
   }
 
   // 金额相关字段（bar/面板/实时快照共用一份口径，避免三处漂移）
@@ -638,7 +739,7 @@
       // 渠道=方舟套餐但模型不在系数表且不是路由别名 → 面板提示"系数未知"
       coefMissing: ch === "afp" && afp == null && !afpRange,
       // 渠道=DeepSeek 官方但没这模型的价表 → 面板提示"无价表"
-      priceMissing: ch === "deepseek" && cost == null,
+              priceMissing: channelHasPriceTable(ch) && cost == null,
       provider: (activeLlm && activeLlm.providerId) || ""
     };
   }

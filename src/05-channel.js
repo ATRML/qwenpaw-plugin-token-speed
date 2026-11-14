@@ -38,6 +38,10 @@
     if (/\/api\/coding(\/|$)/.test(bu) || /coding[_\-]?plan/.test(pid)) return "coding";
     if (/agentplan|agent-plan|agent_plan/.test(pid) || /\/api\/plan\//.test(bu)) return "afp";
     if (pid === "deepseek" || pid.indexOf("deepseek") >= 0 || bu.indexOf("deepseek.com") >= 0) return "deepseek";
+    // v1.18.0：自定义渠道映射（纯数据：PRICING.customChannels，可经 localStorage 覆盖层注入）——
+    // provider_id/base_url 命中子串 → 返回配置的渠道名；没配置/没命中照旧落 other
+    var _cc = customChannelOf(pid, bu);
+    if (_cc) return _cc;
     if (pid) return "other";
     return "";
   }
