@@ -16,7 +16,7 @@
   if (window.__qpTokenSpeedLoaded) return;
   window.__qpTokenSpeedLoaded = true;
 
-  window.__qpTokenSpeedVersion = "1.19.0";
+  window.__qpTokenSpeedVersion = "1.19.1";
 
   // ════════════════════════════════════════════════════════════
   // 01-core.js · 基础常量 / 页面离开标记 / 会话 ID / 结果持久化
@@ -88,9 +88,8 @@
       modelWaitMs: 0, toolResumeAt: 0,
       // v1.13.1：批量冲刷判定 + 诊断（最大单片 / 回放结束原因 / 冲刷计数）
       evWin: [], flushPeak: false, diagMax: null, diagReplayEnd: "", diagFlushAfterSilent: 0,
-      // v1.14.1：原始峰值（不做冲刷剔除，诊断 + "峰值≥平均"兜底）/ 被跳过的疑似冲刷数 /
-      // 本片输出与上一片的间隔（判"静默之后砸下来的一大坨"用）
-      peakRaw: 0, flushSkipped: 0, lastGapMs: 0,
+      // v1.14.1：原始峰值（不做冲刷剔除，诊断 + "峰值≥平均"兜底）/ 被跳过的疑似冲刷数
+      peakRaw: 0, flushSkipped: 0,
       totalTokens: 0, promptTokens: 0, cacheHitTokens: 0, model: "",
       seenFullText: "",
       tLast: 0, eventCount: 0,
@@ -883,7 +882,6 @@
     st.peakMax = 0;
     st.peakRaw = 0;        // v1.14.1：未剔除冲刷的原始峰值
     st.flushSkipped = 0;   // v1.14.1：看着像冲刷、实为连续流而未剔除的次数
-    st.lastGapMs = 0;      // v1.14.1：本片与上一片输出的间隔（判"静默后大坨"）
     st.toolCharCount = 0; // v1.12.0 工具参数逐轮重置
     st.toolEstTokens = 0;
     st.toolTokens = 0;
@@ -1114,9 +1112,6 @@
       st.window = []; st.evWin = [[t, deltaTok, deltaTok > 600 && !!st.tLast && t - st.tLast >= 1200, st.tLast ? t - st.tLast : 0]]; st.lastSpeed = 0;
       st.currentSeg = { t0: t, t1: t, tokens: 0, firstTokens: deltaTok, flushTokens: 0, ev: 0, maxEv: 0 };
     }
-    // v1.14.1：记下本片与上一片输出的间隔——"静默之后砸下来的一大坨"才是补发尾巴/
-    // 网关缓冲刷出；连续大片推送（高分片模型）不再被误当成冲刷剔除
-    st.lastGapMs = st.tLast ? Math.max(0, t - st.tLast) : 0;
     st.tLast = t;
     st.idleAccountedUntil = 0;
     if (!st.liveStartT) st.liveStartT = t;
@@ -1279,7 +1274,6 @@
         return;
       }
       var _argT = st.eventAt;
-      st.lastGapMs = st.tLast ? Math.max(0, _argT - st.tLast) : 0;
       if (!st.tFirst) { st.tFirst = _argT; st.ttft = _argT - st.t0; }
       if (!st.liveStartT) st.liveStartT = _argT;
       if (st.__sid === getSessionId()) renderRunning(runningView(st));
@@ -1547,6 +1541,11 @@
     genSpeed = genTime > 0.05 ? measuredTokens / genTime : 0;
     // Wall-clock throughput includes the first packet; measured window speed does
     // not. A large initial packet cannot establish a peak, so do not fabricate one.
+    // v1.19.1：不变量兜底（展示自洽优先）——avg 为 wall-clock 口径（含首包等待），peak
+    // 为 measured 窗口口径（不含首包，见上）。多窗口回合两口径可倒挂；此时取较大者，
+    // 不展示"平均 > 峰值"的自相矛盾（v1.14.1 遗留未落地项，实测 560.8 > 464.5）。
+    // 单包/无可测窗口回合不兜：一个瞬时大包不能建立峰值，保持 v1.15.0"不捏造"决策。
+    if (measuredTokens > 0 && avg > peak) peak = avg;
     // 费用 output 侧优先精确 completion_tokens；usage 脏（非物理）时回退估算
     var costCompletion = (st.finalUsage && st.finalUsage.completionTokens >= 0 && !implausible)
       ? st.finalUsage.completionTokens : st.tokenCount + st.toolTokens + (st.replayTokens || 0);
@@ -2475,8 +2474,9 @@
       afpLo: _money.afpLo,
       afpHi: _money.afpHi,
       coefRange: _money.coefRange,
-      // v1.14.1：不变量——峰值不可能低于平均（与 endTurn 同款兜底）
-      peak: st.peakMax || 0,
+      // v1.14.1：不变量——峰值不可能低于平均（与 endTurn 同款兜底；此处 avg/peak 同为
+      // wall-clock 口径，兜底无口径差）
+      peak: Math.max(st.peakMax || 0, _liveEl > 0.1 ? st.tokenCount / _liveEl : 0),
       avg: _liveEl > 0.1 ? st.tokenCount / _liveEl : 0, ts: 0,
       attached: st.attached,
       replayTokens: _replayN,

@@ -195,8 +195,9 @@
       afpLo: _money.afpLo,
       afpHi: _money.afpHi,
       coefRange: _money.coefRange,
-      // v1.14.1：不变量——峰值不可能低于平均（与 endTurn 同款兜底）
-      peak: st.peakMax || 0,
+      // v1.14.1：不变量——峰值不可能低于平均（与 endTurn 同款兜底；此处 avg/peak 同为
+      // wall-clock 口径，兜底无口径差）
+      peak: Math.max(st.peakMax || 0, _liveEl > 0.1 ? st.tokenCount / _liveEl : 0),
       avg: _liveEl > 0.1 ? st.tokenCount / _liveEl : 0, ts: 0,
       attached: st.attached,
       replayTokens: _replayN,

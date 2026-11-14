@@ -52,7 +52,6 @@
     st.peakMax = 0;
     st.peakRaw = 0;        // v1.14.1：未剔除冲刷的原始峰值
     st.flushSkipped = 0;   // v1.14.1：看着像冲刷、实为连续流而未剔除的次数
-    st.lastGapMs = 0;      // v1.14.1：本片与上一片输出的间隔（判"静默后大坨"）
     st.toolCharCount = 0; // v1.12.0 工具参数逐轮重置
     st.toolEstTokens = 0;
     st.toolTokens = 0;
@@ -283,9 +282,6 @@
       st.window = []; st.evWin = [[t, deltaTok, deltaTok > 600 && !!st.tLast && t - st.tLast >= 1200, st.tLast ? t - st.tLast : 0]]; st.lastSpeed = 0;
       st.currentSeg = { t0: t, t1: t, tokens: 0, firstTokens: deltaTok, flushTokens: 0, ev: 0, maxEv: 0 };
     }
-    // v1.14.1：记下本片与上一片输出的间隔——"静默之后砸下来的一大坨"才是补发尾巴/
-    // 网关缓冲刷出；连续大片推送（高分片模型）不再被误当成冲刷剔除
-    st.lastGapMs = st.tLast ? Math.max(0, t - st.tLast) : 0;
     st.tLast = t;
     st.idleAccountedUntil = 0;
     if (!st.liveStartT) st.liveStartT = t;
@@ -448,7 +444,6 @@
         return;
       }
       var _argT = st.eventAt;
-      st.lastGapMs = st.tLast ? Math.max(0, _argT - st.tLast) : 0;
       if (!st.tFirst) { st.tFirst = _argT; st.ttft = _argT - st.t0; }
       if (!st.liveStartT) st.liveStartT = _argT;
       if (st.__sid === getSessionId()) renderRunning(runningView(st));

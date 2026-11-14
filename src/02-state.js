@@ -21,9 +21,8 @@
       modelWaitMs: 0, toolResumeAt: 0,
       // v1.13.1：批量冲刷判定 + 诊断（最大单片 / 回放结束原因 / 冲刷计数）
       evWin: [], flushPeak: false, diagMax: null, diagReplayEnd: "", diagFlushAfterSilent: 0,
-      // v1.14.1：原始峰值（不做冲刷剔除，诊断 + "峰值≥平均"兜底）/ 被跳过的疑似冲刷数 /
-      // 本片输出与上一片的间隔（判"静默之后砸下来的一大坨"用）
-      peakRaw: 0, flushSkipped: 0, lastGapMs: 0,
+      // v1.14.1：原始峰值（不做冲刷剔除，诊断 + "峰值≥平均"兜底）/ 被跳过的疑似冲刷数
+      peakRaw: 0, flushSkipped: 0,
       totalTokens: 0, promptTokens: 0, cacheHitTokens: 0, model: "",
       seenFullText: "",
       tLast: 0, eventCount: 0,

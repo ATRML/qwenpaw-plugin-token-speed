@@ -230,6 +230,11 @@
     genSpeed = genTime > 0.05 ? measuredTokens / genTime : 0;
     // Wall-clock throughput includes the first packet; measured window speed does
     // not. A large initial packet cannot establish a peak, so do not fabricate one.
+    // v1.19.1：不变量兜底（展示自洽优先）——avg 为 wall-clock 口径（含首包等待），peak
+    // 为 measured 窗口口径（不含首包，见上）。多窗口回合两口径可倒挂；此时取较大者，
+    // 不展示"平均 > 峰值"的自相矛盾（v1.14.1 遗留未落地项，实测 560.8 > 464.5）。
+    // 单包/无可测窗口回合不兜：一个瞬时大包不能建立峰值，保持 v1.15.0"不捏造"决策。
+    if (measuredTokens > 0 && avg > peak) peak = avg;
     // 费用 output 侧优先精确 completion_tokens；usage 脏（非物理）时回退估算
     var costCompletion = (st.finalUsage && st.finalUsage.completionTokens >= 0 && !implausible)
       ? st.finalUsage.completionTokens : st.tokenCount + st.toolTokens + (st.replayTokens || 0);
