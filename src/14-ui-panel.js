@@ -1,5 +1,6 @@
   // ════════════════════════════════════════════════════════════
-  // 14-ui-panel.js · 详情面板（大折线图 / 分段增量表 / 600ms 实时刷新）
+  // 14-ui-panel.js · 详情面板（三卡 hero / sparkline / Credits 分解 / 今日账本 / 分段增量表）
+  // v1.20.0 仪表甲板重设计：head 每拍重绘（数字实时跳），分段表增量追加（滚动不丢）
   // ════════════════════════════════════════════════════════════
   // ---------- 详情面板（独立界面：大折线图 + 分段明细 + 完整汇总） ----------
 
@@ -37,15 +38,15 @@
     [0, 0.5, 1].forEach(function (f) {
       var gy = y(max * f).toFixed(1);
       var label = (max * f).toFixed(max >= 100 ? 0 : 1);
-      grid += '<line x1="' + PL + '" y1="' + gy + '" x2="' + (W - PR) + '" y2="' + gy + '" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>' +
-        '<text x="' + (PL - 6) + '" y="' + gy + '" fill="#8fa4c2" font-size="10" text-anchor="end" dominant-baseline="middle">' + label + "</text>";
+      grid += '<line x1="' + PL + '" y1="' + gy + '" x2="' + (W - PR) + '" y2="' + gy + '" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>' +
+        '<text x="' + (PL - 6) + '" y="' + gy + '" fill="#7d8ca3" font-size="10" text-anchor="end" dominant-baseline="middle">' + label + "</text>";
     });
     // X 轴段号（首、尾，段多时加中点）
-    var axis = '<text x="' + x(0) + '" y="' + (H - 8) + '" fill="#8fa4c2" font-size="10" text-anchor="middle">' + sourceIndices[0] + '</text>' +
-      '<text x="' + x(n - 1) + '" y="' + (H - 8) + '" fill="#8fa4c2" font-size="10" text-anchor="middle">' + sourceIndices[n - 1] + "</text>";
+    var axis = '<text x="' + x(0) + '" y="' + (H - 8) + '" fill="#7d8ca3" font-size="10" text-anchor="middle">' + sourceIndices[0] + '</text>' +
+      '<text x="' + x(n - 1) + '" y="' + (H - 8) + '" fill="#7d8ca3" font-size="10" text-anchor="middle">' + sourceIndices[n - 1] + "</text>";
     if (n >= 6) {
       var mid = Math.floor((n - 1) / 2);
-      axis += '<text x="' + x(mid) + '" y="' + (H - 8) + '" fill="#8fa4c2" font-size="10" text-anchor="middle">' + sourceIndices[mid] + "</text>";
+      axis += '<text x="' + x(mid) + '" y="' + (H - 8) + '" fill="#7d8ca3" font-size="10" text-anchor="middle">' + sourceIndices[mid] + "</text>";
     }
     // 折线 + 每段数据点（悬浮 title 提示该段明细）
     var dots = pts.map(function (p, i) {
@@ -53,13 +54,118 @@
       var tip = "段" + sourceIndices[i] + "：总量 " + Math.round(s.tokens) + " tok；测速增量 " + Math.round(measuredSegTokens(s))
         + " tok / " + ((s.t1 - s.t0) / 1000).toFixed(1) + "s = " + speeds[i].toFixed(1) + " tok/s（排除首包和缓冲冲刷）";
       return '<circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="' + (i === n - 1 ? 3.5 : 2.5) +
-        '" fill="' + (i === n - 1 ? "#98edda" : "rgba(130,180,255,0.85)") + '"><title>' + tip + "</title></circle>";
+        '" fill="' + (i === n - 1 ? "#ffd479" : "rgba(127,231,196,0.85)") + '"><title>' + tip + "</title></circle>";
     }).join("");
     return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="各有效分段生成速度趋势，单位 tok/s">' + grid +
-      '<path d="' + path + '" stroke="rgba(130,180,255,0.7)" stroke-width="1.5" fill="none"/>' + dots + axis + "</svg>";
+      '<path d="' + path + '" stroke="rgba(143,184,255,0.75)" stroke-width="1.5" fill="none"/>' + dots + axis + "</svg>";
   }
 
-  // 详情面板头部 HTML（title/说明/chips/折线图/分段标题；传入 result 或"活 state 快照"）
+  // v1.20.0 实时速度 sparkline（生成中 hero 速度卡内；≥2 个采样点才画，不捏造趋势）
+  function buildSparkline(hist) {
+    if (!hist || hist.length < 2) return "";
+    var W = 220, H = 40, max = 1, i;
+    for (i = 0; i < hist.length; i++) if (hist[i][1] > max) max = hist[i][1];
+    var t0 = hist[0][0], span = Math.max(1, hist[hist.length - 1][0] - t0);
+    var pts = hist.map(function (p) { return [(p[0] - t0) / span * W, H - 4 - (p[1] / max) * (H - 10)]; });
+    var d = pts.map(function (p, j) { return (j ? "L" : "M") + p[0].toFixed(1) + "," + p[1].toFixed(1); }).join(" ");
+    return '<svg class="qp-spark" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true">' +
+      '<path d="' + d + ' L' + W + ',' + H + ' L0,' + H + ' Z" fill="rgba(127,231,196,0.10)"/>' +
+      '<path d="' + d + '" fill="none" stroke="#7fe7c4" stroke-width="1.5"/></svg>';
+  }
+
+  // v1.20.0 计费 hero 卡：credits 金 / 人民币青 / 套餐蓝；算不出钱给"—"与原因（不猜）
+  function billingCardHtml(r) {
+    var label, num, cap, cls = "";
+    if (r.cost != null && r.costUnit === "credits") {
+      cls = " credits";
+      label = 'Credits 消耗<span class="qp-d-tag">Token Plan</span>';
+      num = fmtCredits(r.cost) + '<small>credits</small>';
+      cap = '≈' + fmtMoney(creditsToCny(r.cost), '¥') + ' 刊例价';
+      var tierId = tpTierPref(), plan = null;
+      for (var i = 0; i < TP_PLANS.length; i++) if (TP_PLANS[i].id === tierId) plan = TP_PLANS[i];
+      if (plan) cap += ' · 按 ' + plan.name + ' 摊销 ≈' + fmtMoney(r.cost * plan.price / plan.quota, '¥');
+      if (r.tp && r.tp.factor < 1) cap = '<span class="qp-d-disc">' + escHtml(r.tp.factorNote || '折扣生效') + '</span>' + cap;
+    } else if (r.cost != null && r.costUnit === "plan") {
+      label = '套餐抵扣';
+      num = fmtMoney(r.cost, "") + '<small>额度</small>';
+      cap = escHtml(channelLabel(r.channel));
+    } else if (r.cost != null) {
+      label = '本轮费用';
+      num = fmtMoney(r.cost, '¥');
+      cap = escHtml(channelLabel(r.channel));
+      if (r.channel === "deepseek") {
+        var t = priceTableFor(r.model);
+        if (t) cap += ' · ' + (isPeakHour(t) ? '尖峰时段' : '低谷时段');
+      }
+    } else if (r.afp != null && r.afp > 0) {
+      label = '套餐抵扣';
+      num = fmtPlan(r.afp) + '<small>额度</small>';
+      cap = '系数计费 · ' + escHtml(channelLabel(r.channel));
+    } else if (r.coefRange && r.afpLo != null) {
+      label = '套餐抵扣 · 参考';
+      num = fmtPlanRange({ lo: r.afpLo, hi: r.afpHi }) + '<small>额度</small>';
+      cap = 'Auto 路由 · 活动期外参考区间';
+    } else if (r.tpRange && r.tpLo != null) {
+      cls = " credits";
+      label = 'Credits · 参考';
+      num = fmtCredits(r.tpLo) + '~' + fmtCredits(r.tpHi) + '<small>credits</small>';
+      cap = 'auto 路由 · 全表当前时刻区间';
+    } else {
+      label = '计费';
+      num = '—';
+      cap = r.coefMissing ? '系数未知' : r.priceMissing ? '无价表' : '渠道未识别';
+    }
+    return '<div class="qp-d-card bill' + cls + '"><div class="qp-d-label">' + label + '</div><div class="qp-d-number">' + num + '</div><div class="qp-d-caption">' + cap + '</div></div>';
+  }
+
+  // v1.20.0 Credits 三分量分解条（输入/缓存/输出），阶梯/估算/折扣口径全部标注
+  function tpBreakdownHtml(r) {
+    if (!r.tp) return "";
+    var t = r.tp, sum = Math.max(t.input + t.cache + t.output, 1e-9);
+    function bar(label, v, cls) {
+      var pct = Math.max(2, Math.round(v / sum * 100));
+      return '<div class="qp-tp-row"><span class="qp-tp-l">' + label + '</span><span class="qp-tp-track"><span class="qp-tp-fill ' + cls + '" style="width:' + pct + '%"></span></span><span class="qp-tp-v">' + fmtCredits(v) + '</span></div>';
+    }
+    var notes = [];
+    if (t.tierIdx > 0) notes.push('输入超阶梯阈值，按第 ' + (t.tierIdx + 1) + ' 档计价');
+    if (t.cacheAssumed) notes.push('缓存命中单价未公布，按输入价估算');
+    if (t.assumedBase) notes.push('预览版无独立刊例价，按 qwen4-max 刊例价估算');
+    return '<div class="qp-d-section">Credits 构成<small>输入 / 缓存 / 输出 · 三分量</small></div><div class="qp-tp">' +
+      bar('输入', t.input, 'in') + bar('缓存', t.cache, 'ca') + bar('输出', t.output, 'out') +
+      (notes.length ? '<div class="qp-tp-note">' + escHtml(notes.join('；')) + '</div>' : '') + '</div>';
+  }
+
+  // v1.20.0 今日账本（本地滚动流水聚合；credits>0 时提供套餐档位摊销选择）
+  function tpTierPref() { try { return localStorage.getItem("qp_token_speed_tp_tier") || ""; } catch (e) { return ""; } }
+  function ledgerHtml() {
+    var s = ledgerToday();
+    if (!s.turns) return "";
+    var parts = ['<span>' + s.turns + ' 回合</span>', '<span>输出 ' + fmtNum(s.out) + ' tok</span>'];
+    if (s.credits > 0) parts.push('<span class="qp-lg-cr">◈ ' + fmtCredits(s.credits) + ' credits</span>');
+    if (s.cny > 0) parts.push('<span class="qp-lg-cny">' + fmtMoney(s.cny, '¥') + '</span>');
+    if (s.plan > 0) parts.push('<span class="qp-lg-plan">▣ ' + fmtPlan(s.plan) + ' 额度</span>');
+    var tierSel = "";
+    if (s.credits > 0) {
+      var cur = tpTierPref(), plan = null, i;
+      for (i = 0; i < TP_PLANS.length; i++) if (TP_PLANS[i].id === cur) plan = TP_PLANS[i];
+      var opts = '<option value="">不摊销</option>';
+      for (i = 0; i < TP_PLANS.length; i++) {
+        var p = TP_PLANS[i];
+        opts += '<option value="' + p.id + '"' + (cur === p.id ? ' selected' : '') + '>' + p.name + ' ¥' + p.price + '/月</option>';
+      }
+      tierSel = '<select id="qp-tp-tier" class="qp-tp-select" title="选择你的 Token Plan 档位，按订阅实际成本摊销今日 credits">' + opts + '</select>';
+      if (plan) parts.push('<span class="qp-lg-amort">按 ' + plan.name + ' 摊销 ≈' + fmtMoney(s.credits * plan.price / plan.quota, '¥') + '</span>');
+    }
+    var models = Object.keys(s.byModel).sort(function (a, b) { return (s.byModel[b].out || 0) - (s.byModel[a].out || 0); }).slice(0, 3);
+    var mhtml = models.map(function (m) {
+      var b = s.byModel[m];
+      return '<span class="qp-lg-m" title="' + b.turns + ' 回合 · 输出 ' + Math.round(b.out) + ' tok">' + escHtml(m) + ' · ' + fmtNum(b.out) + '</span>';
+    }).join("");
+    return '<div class="qp-d-section">今日消耗<small>本地账本 · 仅本机统计</small>' + tierSel + '</div><div class="qp-lg"><div class="qp-lg-sum">' + parts.join('') + '</div>' +
+      (mhtml ? '<div class="qp-lg-models">' + mhtml + '</div>' : '') + '</div>';
+  }
+
+  // 详情面板头部 HTML（title/说明/hero 三卡/时间带/用量/Credits 分解/账本/折线图/分段标题）
   // v1.9.0：拆成 head（每拍重绘，数字实时跳）与分段表（增量追加，见 syncSegs）
   function buildDetailHead(r) {
     var segs = r.segments || [], running = r.status === "running", info = statusInfo(r, running);
@@ -83,17 +189,27 @@
     if (r.afp != null && r.afp > 0) usage += row("套餐抵扣", fmtPlan(r.afp) + " 额度", channelTip(r.channel, r.provider)) + row("其中缓存重计", rebillNote(r.channel, r.cacheHit, r.model).replace(/[（）]/g, '').replace('缓存重计 ', '') || "—");
     if (r.cost != null) usage += r.costUnit === "plan"
       ? row("套餐抵扣", fmtMoney(r.cost, "") + " 额度", channelTip(r.channel, r.provider))
-      : row("费用", fmtMoney(r.cost, "¥"), channelTip(r.channel, r.provider));
+      : r.costUnit === "credits"
+        ? row("Credits 消耗", fmtCredits(r.cost) + " credits", channelTip(r.channel, r.provider))
+        : row("费用", fmtMoney(r.cost, "¥"), channelTip(r.channel, r.provider));
     if (r.coefRange && r.afpLo != null) usage += row("套餐抵扣 · 参考", fmtPlanRange({lo:r.afpLo,hi:r.afpHi}), ALIAS_TIP);
+    if (r.tpRange && r.tpLo != null) usage += row("Credits · 参考", fmtCredits(r.tpLo) + "~" + fmtCredits(r.tpHi) + " credits", "auto 智能路由底层模型不定，按全表当前时刻给参考区间");
     if (r.coefMissing || r.priceMissing || !r.channel) usage += row("计费", r.coefMissing ? "系数未知" : r.priceMissing ? "无价表" : "渠道未识别", channelTip(r.channel,r.provider));
     var observed = !r.historyOnly && speed > 0;
     var speedNote = r.historyOnly ? "历史仅恢复用量，未观测生成速度" : r.attached ? "仅统计接入后有效生成，回放不计速" : "排除首字、工具等待及缓冲冲刷";
+    // v1.20.0 燃烧率 caption：当前速度下每分钟烧多少（只算输出侧）
+    var burnHtml = "";
+    if (running && r.burnRate && r.burnRate.value > 0) {
+      burnHtml = '<div class="qp-d-burn">燃烧率 ≈' + (r.burnRate.unit === "credits/min" ? fmtCredits(r.burnRate.value) + ' credits/min' : fmtMoney(r.burnRate.value, '¥') + '/h') + '</div>';
+    }
+    var sparkHtml = running ? buildSparkline(r.speedHist) : "";
     var html = '<div class="qp-d-title"><div><div class="qp-d-eyebrow">TOKEN SPEED</div><div class="qp-d-heading" id="qp-d-heading">本轮生成概览</div><div class="qp-d-meta">' + escHtml(r.model || "未知模型") + (r.aliasModel ? " · Auto" : "") + ' · ' + channelLabel(r.channel) + (fmtAge(r) ? ' · ' + fmtAge(r) : '') + '</div></div><div class="qp-d-tools"><span class="qp-d-badge ' + escHtml(r.status) + '" title="' + escHtml(info.tip) + '">' + info.text + '</span><button type="button" class="qp-d-close" id="qp-d-close" aria-label="关闭生成详情">×</button></div></div>' + note +
-      '<div class="qp-d-hero"><div class="qp-d-card speed"><div class="qp-d-label">' + (running ? '实时生成速度' : '有效生成速度') + '<span class="qp-d-tag">' + (r.historyOnly ? '未观测' : '观测估算') + '</span></div><div class="qp-d-number">' + (observed ? fmtSpeed(speed) : '—') + '<small>tok/s</small></div><div class="qp-d-caption">' + speedNote + '</div></div><div class="qp-d-card"><div class="qp-d-label">本轮输出<span class="qp-d-tag">' + (estimated ? '估算' : '后端用量') + '</span></div><div class="qp-d-number" title="' + Math.round(total).toLocaleString('zh-CN') + ' tok">' + (estimated ? '≈' : '') + fmtNum(total) + '<small>tok</small></div><div class="qp-d-caption">含正文、思考与工具参数</div></div></div>' +
+      '<div class="qp-d-hero"><div class="qp-d-card speed"><div class="qp-d-label">' + (running ? '实时生成速度' : '有效生成速度') + '<span class="qp-d-tag">' + (r.historyOnly ? '未观测' : '观测估算') + '</span></div><div class="qp-d-number">' + (observed ? fmtSpeed(speed) : '—') + '<small>tok/s</small></div>' + sparkHtml + '<div class="qp-d-caption">' + speedNote + '</div>' + burnHtml + '</div><div class="qp-d-card"><div class="qp-d-label">本轮输出<span class="qp-d-tag">' + (estimated ? '估算' : '后端用量') + '</span></div><div class="qp-d-number" title="' + Math.round(total).toLocaleString('zh-CN') + ' tok">' + (estimated ? '≈' : '') + fmtNum(total) + '<small>tok</small></div><div class="qp-d-caption">含正文、思考与工具参数</div></div>' + billingCardHtml(r) + '</div>' +
       '<div class="qp-d-timings">' + time("首字等待", r.attached || r.historyOnly ? '—' : fmtMs(r.ttft), "从提交请求到首个输出到达") +
       time("工具 / 空闲等待", waitValue(r.pauseSec), "已观测工具执行与段间空闲等待") + time("工具后模型等待", waitValue(r.modelWaitSec), "工具结束到下一次正文或思考到达，单列记录") +
       time(r.originKnown === false ? "接入后观察" : "总耗时", r.secondsKnown === false || r.seconds == null ? '—' : fmtSec(r.seconds), "从请求开始到结束；中途接入时为已观测时长") + '</div>' +
       '<div class="qp-d-section">用量与计费<small>拆分项已包含在总量内</small></div><div class="qp-d-usage">' + usage + '</div>' +
+      tpBreakdownHtml(r) + ledgerHtml() +
       '<div class="qp-d-explain">' + (estimated ? '≈ 表示估算。输出总量在后端用量到达后校准；速度与输出拆分仍为观测估算。' : '输出总量取后端用量；带 ≈ 的速度与拆分项为观测估算。') + '</div>';
     if (!r.historyOnly) html += '<div class="qp-d-section">生成分段<small title="' + escHtml(AVG_TIP) + '">' + segs.length + ' 段' + (r.peak > 0 ? ' · 峰值 ' + fmtSpeed(r.peak) + ' tok/s' : '') + (r.avg > 0 ? ' · 全程均速 ' + fmtSpeed(r.avg) + ' tok/s' : '') + '</small></div><div class="qp-d-chart">' + buildDetailChart(segs) + '</div>';
     if (segs.length) html += '<div class="qp-d-segtitle"><span>分段</span><span>输出量 ≈</span><span>有效时长</span><span>生成速度 ≈</span></div>';
@@ -195,6 +311,13 @@
       afpLo: _money.afpLo,
       afpHi: _money.afpHi,
       coefRange: _money.coefRange,
+      // v1.20.0：TokenPlan 明细 / auto 区间 / 燃烧率 / sparkline 采样
+      tp: _money.tp,
+      tpLo: _money.tpLo,
+      tpHi: _money.tpHi,
+      tpRange: _money.tpRange,
+      burnRate: burnRateOf(_ch, st.model, st.lastSpeed || 0, st.promptTokens),
+      speedHist: st.speedHist ? st.speedHist.slice() : [],
       // v1.14.1：不变量——峰值不可能低于平均（与 endTurn 同款兜底；此处 avg/peak 同为
       // wall-clock 口径，兜底无口径差）
       peak: Math.max(st.peakMax || 0, _liveEl > 0.1 ? st.tokenCount / _liveEl : 0),
@@ -213,6 +336,16 @@
       });
     }
   }
+  // v1.20.0：套餐档位选择（今日账本摊销）——换档就地强制重绘（签名不变也要刷）
+  function bindTierSelect() {
+    var sel = document.getElementById("qp-tp-tier");
+    if (!sel || !sel.addEventListener) return;
+    sel.addEventListener("change", function () {
+      try { localStorage.setItem("qp_token_speed_tp_tier", sel.value || ""); } catch (e) { /* ignore */ }
+      var sid = getSessionId(), st = getActiveStream(sid);
+      refreshDetail(st && st.tFirst ? liveSnapshot(st) : loadLastResult(sid));
+    });
+  }
   // v1.9.0：paintDetail 拆"头 + 分段表"两步——head 每拍重绘（数字实时跳），
   // 分段表增量追加（已有行不重建，滚动位置不丢）
   function paintDetail(p, snap, live) {
@@ -226,6 +359,7 @@
     var headEl = p.querySelector(".qp-d-head");
     if (headEl) headEl.innerHTML = buildDetailHead(snap);
     bindDetailClose(p);   // head 换 innerHTML 后关闭按钮是新节点，得重新绑
+    bindTierSelect();     // v1.20.0 档位选择同理
     var box = p.querySelector(".qp-d-segs");
     if (box) syncSegs(box, snap.segments || [], !!live);
     p.scrollTop = top;
@@ -273,7 +407,8 @@
     paintDetail(p, r, !!(r && r.status === "running")); // v1.9.0：统一走增量渲染
     detailSig = detailSignature(getSessionId());
     setTimeout(function () {
-      document.addEventListener("click", onDocClickDetail, true);
+      // v1.20.0 稳定性：面板若已在同一拍内被关掉，不再挂 document 监听（旧版会留下孤儿监听器）
+      if (document.getElementById(PANEL_ID)) document.addEventListener("click", onDocClickDetail, true);
     }, 0);
     document.addEventListener("keydown", onDetailKeydown, true); // v1.13.0：ESC 关闭
     detailTimer = setInterval(function () {

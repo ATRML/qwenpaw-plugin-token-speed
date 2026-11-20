@@ -1,3 +1,44 @@
+# v1.20.0 — 2026-11-20：阿里云百炼 Token Plan credits 计价 + 仪表甲板前端重设计 + 稳定性加固
+
+## 新计价体系：百炼 Token Plan（credits）与百炼按量（dashscope）
+
+- 官方换算（用量与额度页 qwen3.6-plus 对拍示例实证）：credits/万tok 数值 = 刊例价 元/百万tok 数值（1 credit = 0.01 元刊例价）。示例：输入 8349 tok → 1.67 credits ⇒ 2 credits/万tok；缓存 40794 → 0.82 ⇒ 0.2；输出 573 → 0.69 ⇒ 12。
+- 渠道判定只认证据：专属端点 token-plan.<region>.maas.aliyuncs.com 或 provider 名含 tokenplan → tokenplan；dashscope.aliyuncs.com 通用端点 / provider 名含 dashscope|bailian → dashscope（人民币刊例价）；coding.dashscope.aliyuncs.com → coding。base_url 证据优先于 provider 名（与 v1.8.0 修 DeepSeek 误判同一原则）。
+- 价表覆盖 Token Plan 文本模型白名单（qwen4-max / qwen3.8-max / qwen3.8-flash / qwen3.7-max / qwen3.7-plus / qwen3.6-plus / qwen3.6-flash / deepseek-v4.1-flash / deepseek-v4-pro(-0813) / deepseek-v4-flash-0731 / glm-5.3/5.2/5.1/5 / kimi-k2.7-code/k2.6/k2.5 / MiniMax-M2.5），刊例价 2026-11-20 对拍百炼模型价格页（华北2北京）。
+- 阶梯计价：plus/flash 系按单次请求输入超 256K 跳档（qwen3.7-plus 2/8→6/24，qwen3.6-plus 2/12→8/48，qwen3.6-flash 1.2/7.2→4.8/28.8）；glm-5.1/5 按 32K 分档。
+- 官方夜间折扣（北京 22:00–08:00，UTC+8 换算、与本机时区无关）：qwen3.8-max/flash 4 折，deepseek-v4-pro-0813/v4-flash-0731/v4.1-flash(-1017) 5 折。对拍洞察：deepseek 系 5 折 × 忙时刊例价恰等于闲时刊例价（2×0.5=1、8×0.5=4、9×0.5=4.5…），故 base 填忙时价 + night:0.5 自洽。
+- qwen4-max-preview 预览期（11/11 10:00–11/25 24:00 北京）2 折，夜间再 4 折（官方明示叠加 0.8 折）；预览版无独立刊例价，按 qwen4-max 刊例价计，面板标注"估算"（assumedBase）。
+- auto 智能路由：底层模型不定 → 全表当前时刻参考区间（与别名区间同口径，不假装精确）；未入表模型（图像/视频/语音等）不显示金额。
+- 缓存命中单价只填官方已公布的（qwen4-max 0.5 / qwen3.8-max 1.5 / qwen3.6-plus 0.2 / kimi-k2.6 1.1 / MiniMax-M2.5 0.21）；未公布的缓存部分按输入价估算并在面板标注。
+- dashscope 按量渠道复用同一张刊例价表（单位换回人民币）：deepseek 系标 bailianPeak 按忙/闲时（忙 08–22 北京）；Token Plan 的夜间/预览折扣不适用于按量（官方明示两套体系独立）。
+- 覆盖层支持 tokenplan.models 前置合并（tiers 结构校验，坏条目整份忽略不崩）。
+
+## 前端重设计：Instrument Deck（仪表甲板）
+
+- 悬浮条仪表化：状态·模型短标·速度·输出·费用 chip（credits 金 ◈ / 人民币 ¥ / 套餐蓝 ▣）·详情；生成中顶部扫描线动画。算不出钱不显示 chip（宁可空着不猜）。
+- 面板三卡 hero：速度卡（实时 sparkline + 燃烧率 credits/min 或 ¥/h，只算输出侧）/ 输出卡 / 计费卡（credits 大数字 + 刊例价折算 + 套餐档位摊销；人民币尖峰/低谷标注；套餐额度）。
+- Credits 三分量分解条（输入/缓存/输出）+ 阶梯/估算/折扣口径全部标注。
+- 今日消耗账本：本地滚动流水（300 条，sid+turnKey upsert，刷新恢复不重复计账），聚合回合/输出/credits/人民币/额度 + Top3 模型；有 credits 时提供 Token Plan 档位选择（Lite/Essential/Standard/Pro，官方 2026-11-16 价格），按订阅实际成本摊销今日 credits。
+- 视觉：炭黑玻璃底 + 三色语义（薄荷=速度 / 金=Credits / 蓝=输出），CSS 变量化，窄窗响应式、prefers-reduced-motion；dream-skin 磨砂兼容块原样保留。
+- 既有数据点与交互全保留：分段表增量同步（已有行不重建）、ESC/外点关闭、600ms 就地刷新、回放口径标注、历史用量恢复等。
+
+## 稳定性加固
+
+- 修 clone 流 tee 内存泄漏：monitorStream 对过期/缺失 state 也 cancel 已持有的 reader（旧版直接 return，Response.clone() 的未读分支会把整条响应累积在缓冲里，停止重发/快速切路由时泄漏）。
+- SSE 单行未终止缓冲上限 4MB：病态网关输出按中断流收尾，不再无限增长拖垮页面。
+- localStorage 配额溢出不再静默丢结果：丢最旧一半重试一次；lastResult 解析按 raw 字符串内存缓存（面板开着不再每 600ms 重新 parse 上百 KB）。
+- 修孤儿 document 监听器：面板同一拍内被关掉时不再挂延迟外点监听。
+- hideAnchor 短路：隐藏成功后不再每 3s 全量 TreeWalker 扫 body（会话切换重置 + 30s 强制复扫兜底重挂载）。
+- init 子系统隔离：样式/挂载/路由/渠道任一失败不拖垮统计主循环；单拍失败不终止循环；window resize 立即重定位悬浮条。
+- retro 补算签名纳入 credits 明细/折扣/auto 区间；补算后账本金额同步更新。
+
+## 兼容性
+
+- 历史数据零迁移：旧结果无 tp/costUnit 字段照旧渲染；plan 渠道面板仍全篇无 ¥（摊销/账本人民币只对 credits 开放）。
+- 全部函数名与数字格式保留（segRowHtml/syncSegs/buildDetailChart 等），测试 harness 零改动。
+
+验证：66/66 回归场景（新增 16：TokenPlan 计价/阶梯/夜间/预览/auto/渠道证据/按量/账本/覆盖层/稳定性/UI 语义）+ 27/27 legacy 场景通过；dist 重建语法检查通过（195KB）。
+
 # v1.19.1 — 2026-11-15：峰值-平均不变量兜底与死代码清理
 
 - 终态补落"峰值不可能低于平均"兜底（v1.14.1 遗留项）：存在可测生成窗口的回合，峰值低于全程平均时取平均，详情面板不再出现"平均 > 峰值"的自相矛盾。两值口径不同（平均含首包等待、峰值只计有效生成窗口），兜底为展示自洽优先并注释标明口径 trade-off；单包/无可测窗口回合保持 v1.15.0"不捏造峰值"决策不兜底。

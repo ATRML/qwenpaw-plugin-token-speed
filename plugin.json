@@ -1,9 +1,9 @@
 {
   "id": "token-speed",
   "name": "Token 实时速度",
-  "version": "1.19.1",
+  "version": "1.20.0",
   "type": "general",
-  "description": "清晰展示实时生成速度、本轮输出、分项耗时与用量计费。区分观测估算与后端用量，支持会话切换恢复。",
+  "description": "清晰展示实时生成速度、本轮输出、分项耗时与用量计费（套餐额度 / 人民币 / 阿里云百炼 Token Plan Credits，含阶梯计价、夜间折扣、Credits 三分量与今日账本）。区分观测估算与后端用量，支持会话切换恢复。",
   "author": "ATRML",
   "entry_point": "plugin.py",
   "entry": {

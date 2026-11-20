@@ -52,7 +52,13 @@
     return false;
   }
 
-  function hideAnchor() {
+  // v1.20.0 稳定性/性能：标语隐藏短路。旧版每 3s 全量 TreeWalker 扫 body 所有文本节点，
+  // 长会话里是纯浪费。标语是落地页静态节点——隐藏成功一次后就不再扫（会话切换重置；
+  // 主循环每 30s 强制复扫一次兜底 React 重挂载）。首次没扫到不置位，继续 3s 一扫直到命中。
+  var anchorHidden = false;
+  function resetAnchorScan() { anchorHidden = false; }
+  function hideAnchor(force) {
+    if (anchorHidden && !force) return;
     try {
       var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
         acceptNode: function (n) {
@@ -61,7 +67,7 @@
             ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
         }
       });
-      var n;
+      var n, hid = false;
       while ((n = walker.nextNode())) {
         var el = n.parentElement;
         if (el && !el._qpHidden && !insideChatOrPlugin(el)) {
@@ -69,9 +75,11 @@
           if (flat.length < 30) {
             el.style.display = "none";
             el._qpHidden = true;
+            hid = true;
           }
         }
       }
+      if (hid) anchorHidden = true;
     } catch (e) { /* ignore */ }
   }
 
@@ -128,6 +136,7 @@
       if (sid === visibleSid) return;
       visibleSid = sid;
       closeDetail();
+      resetAnchorScan(); // v1.20.0：新会话的落地页标语要重新扫
       refreshBarContent();
     }
     ["pushState", "replaceState"].forEach(function (name) {

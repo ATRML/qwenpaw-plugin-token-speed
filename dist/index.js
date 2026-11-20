@@ -16,10 +16,10 @@
   if (window.__qpTokenSpeedLoaded) return;
   window.__qpTokenSpeedLoaded = true;
 
-  window.__qpTokenSpeedVersion = "1.19.1";
+  window.__qpTokenSpeedVersion = "1.20.0";
 
   // ════════════════════════════════════════════════════════════
-  // 01-core.js · 基础常量 / 页面离开标记 / 会话 ID / 结果持久化
+  // 01-core.js · 基础常量 / 页面离开标记 / 会话 ID / 结果持久化 / 会话账本
   // ════════════════════════════════════════════════════════════
   var BAR_ID = "qp-token-speed-bar";
   var PANEL_ID = "qp-token-speed-detail";
@@ -45,24 +45,114 @@
   var LS_KEY = "qp_token_speed_by_session";
   var LS_MAX_SESSIONS = 80;
 
-  function loadLastResult(sid) {
+  // v1.20.0 稳定性：解析结果按 raw 字符串做内存缓存。面板开着时 loadLastResult 每 600ms
+  // 被调一次，旧版每次重新 JSON.parse 整块（80 会话可达上百 KB）——纯浪费。写入即失效。
+  var lsCache = null;
+  function readAllResults() {
     try {
-      var all = JSON.parse(localStorage.getItem(LS_KEY) || "{}");
-      return all[sid || getSessionId()] || null;
-    } catch (e) { return null; }
+      var raw = localStorage.getItem(LS_KEY) || "{}";
+      if (lsCache && lsCache.raw === raw) return lsCache.obj;
+      var obj = JSON.parse(raw) || {};
+      lsCache = { raw: raw, obj: obj };
+      return obj;
+    } catch (e) { return {}; }
+  }
+  // v1.20.0 稳定性：配额溢出不再静默丢结果——丢最旧一半重试一次（LS_MAX_SESSIONS 之外的兜底）
+  function writeAllResults(all) {
+    var raw = JSON.stringify(all);
+    try {
+      localStorage.setItem(LS_KEY, raw);
+    } catch (e) {
+      try {
+        var keys = Object.keys(all);
+        keys.sort(function (a, b) { return (all[a].ts || 0) - (all[b].ts || 0); });
+        var drop = Math.ceil(keys.length / 2);
+        for (var i = 0; i < drop; i++) delete all[keys[i]];
+        raw = JSON.stringify(all);
+        localStorage.setItem(LS_KEY, raw);
+      } catch (e2) { return false; }
+    }
+    lsCache = { raw: raw, obj: all };
+    return true;
+  }
+
+  function loadLastResult(sid) {
+    var all = readAllResults();
+    return all[sid || getSessionId()] || null;
   }
   // ★ 显式传 sid：结果跟着"流所属会话"走，而不是"用户当前看的会话"
   function saveLastResult(sid, r) {
-    try {
-      var all = JSON.parse(localStorage.getItem(LS_KEY) || "{}");
-      all[sid] = r;
-      var keys = Object.keys(all);
-      if (keys.length > LS_MAX_SESSIONS) {
-        keys.sort(function (a, b) { return (all[a].ts || 0) - (all[b].ts || 0); });
-        while (keys.length > LS_MAX_SESSIONS) delete all[keys.shift()];
-      }
-      localStorage.setItem(LS_KEY, JSON.stringify(all));
-    } catch (e) { /* ignore */ }
+    var all = readAllResults();
+    all[sid] = r;
+    var keys = Object.keys(all);
+    if (keys.length > LS_MAX_SESSIONS) {
+      keys.sort(function (a, b) { return (all[a].ts || 0) - (all[b].ts || 0); });
+      while (keys.length > LS_MAX_SESSIONS) delete all[keys.shift()];
+    }
+    writeAllResults(all);
+  }
+
+  // ---------- v1.20.0 会话账本：近期回合滚动流水（面板"今日消耗"聚合的数据源） ----------
+  // 设计：只存聚合需要的最小字段（不存分段/全文），300 条上限 ≈ 几十 KB；
+  // 按 sid+messageId upsert——刷新后历史恢复同一回合不会重复计账，retro 补算就地更新金额。
+  var LEDGER_KEY = "qp_token_speed_ledger";
+  var LEDGER_MAX = 300;
+  function loadLedger() {
+    try { var a = JSON.parse(localStorage.getItem(LEDGER_KEY) || "[]"); return Array.isArray(a) ? a : []; }
+    catch (e) { return []; }
+  }
+  function saveLedger(a) {
+    try { localStorage.setItem(LEDGER_KEY, JSON.stringify(a)); }
+    catch (e) {
+      try { localStorage.setItem(LEDGER_KEY, JSON.stringify(a.slice(-Math.floor(LEDGER_MAX / 2)))); } catch (e2) { /* ignore */ }
+    }
+  }
+  function ledgerEntryOf(sid, r) {
+    return {
+      ts: r.ts || Date.now(), sid: sid || "", mid: r.turnKey || r.messageId || "",
+      model: r.model || "", channel: r.channel || "", out: r.outputTokens || 0,
+      credits: r.costUnit === "credits" ? r.cost : null,
+      cny: r.costUnit === "cny" ? r.cost : null,
+      plan: r.afp != null ? r.afp : null
+    };
+  }
+  function appendLedger(sid, r) {
+    if (!r || !(r.outputTokens > 0)) return; // 零产出的错误/刷新中止不入账
+    var a = loadLedger();
+    // turnKey（后端 original_id）优先：历史恢复的 display message.id 每次 fetch 都变，
+    // 用它去重会把同一回合重复计账；实测回合的 messageId 是后端稳定 ID
+    var key = (sid || "") + "|" + (r.turnKey || r.messageId || ("ts:" + (r.ts || 0)));
+    var hit = -1;
+    for (var i = a.length - 1; i >= 0; i--) {
+      var k = (a[i].sid || "") + "|" + (a[i].mid || ("ts:" + (a[i].ts || 0)));
+      if (k === key) { hit = i; break; }
+    }
+    var e = ledgerEntryOf(sid, r);
+    if (hit >= 0) a[hit] = e; else a.push(e);
+    if (a.length > LEDGER_MAX) a = a.slice(a.length - LEDGER_MAX);
+    saveLedger(a);
+  }
+  // 今日聚合（本地零点起）：{turns, out, credits, cny, plan, byModel}
+  function ledgerToday() {
+    var d = new Date(); d.setHours(0, 0, 0, 0);
+    var start = d.getTime();
+    var a = loadLedger();
+    var sum = { turns: 0, out: 0, credits: 0, cny: 0, plan: 0, byModel: {} };
+    for (var i = 0; i < a.length; i++) {
+      var e = a[i];
+      if (!e || (e.ts || 0) < start) continue;
+      sum.turns++; sum.out += e.out || 0;
+      if (e.credits != null) sum.credits += e.credits;
+      if (e.cny != null) sum.cny += e.cny;
+      if (e.plan != null) sum.plan += e.plan;
+      var mk = e.model || "未知";
+      var bm = sum.byModel[mk] || (sum.byModel[mk] = { turns: 0, out: 0, credits: 0, cny: 0, plan: 0 });
+      bm.turns++; bm.out += e.out || 0;
+      if (e.credits != null) bm.credits += e.credits;
+      if (e.cny != null) bm.cny += e.cny;
+      if (e.plan != null) bm.plan += e.plan;
+    }
+    return sum;
   }
 
   // ════════════════════════════════════════════════════════════
@@ -102,6 +192,8 @@
       liveTokens: 0, liveStartT: 0, totalGenerated: 0,
       // v1.7.0：面板实时刷新要用的实时速率 / 后端显式回放结束标记
       lastSpeed: 0, replayEndSeen: false,
+      // v1.20.0：实时速度 sparkline 环形缓冲 [t, speed]（面板头图用，tick 采样，上限 120 点）
+      speedHist: [], lastSpeedSampleT: 0,
       // v1.8.0 计费渠道与收尾取证
       providerUsage: "",   // 本回合 SSE usage 里带的 provider_id（最准证据）
       channel: "",         // plan / deepseek / other / ""（未识别）
@@ -205,6 +297,15 @@
     if (v == null || !isFinite(v)) return "-";
     return v >= 0.05 ? v.toFixed(2) : v.toFixed(4);
   }
+  // v1.20.0 Credits 格式化：与额度同量纲（credits/万tok 数值 = 元/百万tok 刊例价），精度规则一致；
+  // 大额（>=1000）收 1 位小数，避免长数字撑破 chip
+  function fmtCredits(v) {
+    if (v == null || !isFinite(v)) return "-";
+    if (v >= 1000) return v.toFixed(1);
+    return v >= 0.05 ? v.toFixed(2) : v.toFixed(4);
+  }
+  // v1.20.0 刊例价折算：1 credit = 0.01 元刊例价（官方换算的数学推论），credits → 元
+  function creditsToCny(v) { return (v == null || !isFinite(v)) ? null : v / 100; }
 
   // v1.5.0：缓存重计标注（v1.8.0 起只在套餐渠道显示——缓存重计是套餐计费规则，人民币
   // 渠道按缓存价另算，不适用）。实测（2026-09-16 对账）：套餐缓存命中按全额系数重复计费
@@ -347,7 +448,16 @@
     // 顺序关键：/api/coding 必须在 /api/plan 前判（两者都可能含 "coding" 无关，但 base 不重叠，保险起见先判）
     if (/\/api\/coding(\/|$)/.test(bu) || /coding[_\-]?plan/.test(pid)) return "coding";
     if (/agentplan|agent-plan|agent_plan/.test(pid) || /\/api\/plan\//.test(bu)) return "plan";
+    // v1.20.0 阿里云百炼 Token Plan：专属端点 token-plan.<region>.maas.aliyuncs.com，
+    // 或 provider 名含 tokenplan/token-plan/token_plan。base_url 证据优先——同一个 qwen 模型名
+    // 在百炼按量/Token Plan/其他渠道都在卖，只认端点不认名字（与 v1.8.0 修 DeepSeek 误判同一原则）
+    if (/token[-_]?plan/.test(pid) || bu.indexOf("token-plan.") >= 0 || bu.indexOf("maas.aliyuncs.com") >= 0) return "tokenplan";
     if (pid === "deepseek" || pid.indexOf("deepseek") >= 0 || bu.indexOf("deepseek.com") >= 0) return "deepseek";
+    // v1.20.0 阿里云 Coding Plan 专属端点 coding.dashscope.aliyuncs.com（与 /api/coding 同渠道，不套金额表）
+    if (bu.indexOf("coding.dashscope") >= 0) return "coding";
+    // v1.20.0 百炼按量付费（dashscope.aliyuncs.com 通用端点 / provider 名含 dashscope|bailian）：
+    // 人民币刊例价计价，与 Token Plan 的 credits 体系独立（官方明示两套额度不互通）
+    if (bu.indexOf("dashscope.aliyuncs.com") >= 0 || /dashscope|bailian/.test(pid)) return "dashscope";
     // v1.18.0：自定义渠道映射（纯数据：PRICING.customChannels，可经 localStorage 覆盖层注入）——
     // provider_id/base_url 命中子串 → 返回配置的渠道名；没配置/没命中照旧落 other
     var _cc = customChannelOf(pid, bu);
@@ -418,10 +528,10 @@
   var mapFetching = false;
   function maybeLoadProviderMap() {
     if (!activeLlm || !activeLlm.providerId) return;
-    // provider_id 本身就能定性（套餐渠道 / DeepSeek 官方）就不用去拉 base_url 了；
+    // provider_id 本身就能定性（套餐渠道 / DeepSeek 官方 / 百炼系）就不用去拉 base_url 了；
     // 只有"认不出"的自定义 provider（例如 huoshanahent 这种）才需要 base_url 佐证
     var ch0 = resolveChannel(activeLlm.providerId, "");
-    if (ch0 === "plan" || ch0 === "deepseek") return;
+    if (ch0 === "plan" || ch0 === "deepseek" || ch0 === "coding" || ch0 === "tokenplan" || ch0 === "dashscope") return;
     var cached = null;
     try { cached = JSON.parse(localStorage.getItem(PROVIDER_MAP_KEY) || "null"); } catch (e) { /* ignore */ }
     if (cached && cached.map && cached.ts && (Date.now() - cached.ts) < PROVIDER_MAP_TTL) {
@@ -451,7 +561,7 @@
   }
 
   // ════════════════════════════════════════════════════════════
-  // 06-pricing.js · PRICING 价目表静态数据区 + 套餐额度/人民币/区间计算
+  // 06-pricing.js · PRICING 价目表静态数据区 + 套餐额度/人民币/Credits/区间计算
   // ════════════════════════════════════════════════════════════
   // ---------- 套餐渠道（Agent Plan）抵扣 ----------
   // 依据官方计费规格文档：
@@ -474,11 +584,13 @@
   //                               weekendOffPeak/cacheHit 可选），coef=套餐（额度=(入+出)×系数/10000），
   //                               start/end（UTC 毫秒）可选窗口（窗口外跳过回退下一条），unit 默认 cny
   //   PRICING.customChannels      自定义渠道映射（v1.18.0）：{ keys:[provider_id/base_url 子串], channel:"渠道名" }
-  // 运行时覆盖层（v1.18.0 建 / v1.19.0 扩展）：localStorage["qp_token_speed_pricing"] 放一份 JSON 即可加模型/调价/接渠道，
-  //   不用改源码重建；用户条目合并进对应表且排在最前（优先命中），解析/结构异常整份忽略并 console.warn，
-  //   内置表原样生效。
+  //   PRICING.tokenplan.models    ★ v1.20.0 阿里云百炼 Token Plan（credits 计价，见下方专节）
+  // 运行时覆盖层（v1.18.0 建 / v1.19.0 扩展 / v1.20.0 加 tokenplan）：localStorage["qp_token_speed_pricing"]
+  //   放一份 JSON 即可加模型/调价/接渠道，不用改源码重建；用户条目合并进对应表且排在最前（优先命中），
+  //   解析/结构异常整份忽略并 console.warn，内置表原样生效。
   // 数据来源：官方计费规格文档（对拍示例：seed-2.1-turbo 50k入/0.5k出 → 12.625 额度）
   //          + 官方核对文档 2026-09-16 + DeepSeek 2026-09-10 调价
+  //          + 百炼 Token Plan 用量与额度页官方对拍示例 + 百炼模型价格页刊例价（2026-11-20 核对）
   // 原则：没对拍过/官方没公布的，宁可不加（面板显示"系数未知/无价表"），不猜数。
   // ════════════════════════════════════════════════════════════════════
   var PRICING = {
@@ -526,14 +638,77 @@
     // —— 泛渠道价表（v1.18.0 建 / v1.19.0 全字段）：第三方渠道配了 table 或 coef 就算钱（覆盖层可整体注入）
     generic: { models: [] },
     // —— 自定义渠道映射（v1.18.0）：resolveChannel 在内置判定后、other 前查这张表
-    customChannels: []
+    customChannels: [],
+    // ════════════════════════════════════════════════════════════════════
+    // ★ v1.20.0 阿里云百炼 Token Plan（credits）与百炼按量（dashscope，人民币）
+    //
+    // 官方换算（用量与额度页 qwen3.6-plus 对拍示例实证）：
+    //   输入 8349 tok → 1.67 credits  ⇒ 2 credits/万tok
+    //   缓存 40794 tok → 0.82 credits ⇒ 0.2 credits/万tok
+    //   输出 573 tok → 0.69 credits   ⇒ 12 credits/万tok
+    // 即 credits/万tok 的数值 = 刊例价 元/百万tok 的数值（1 credit = 0.01 元刊例价）。
+    // 因此 tiers 里的 input/output/cacheHit 直接填百炼模型价格页（华北2北京）刊例价数字。
+    //
+    // 结构：{ keys, exact?, tiers:[{upTo, input, output, cacheHit?}], night?, preview?, bailianPeak?, assumedBase? }
+    //   tiers     按"单次请求输入 token 数"阶梯计价（官方 plus/flash/glm-5.1/glm-5 有阶梯）；
+    //             upTo=Infinity 表示不分阶梯。cacheHit 缺省 = 官方未公布缓存单价 → 缓存部分按输入价估（面板标注）。
+    //   night     Token Plan 官方夜间折扣（北京 22:00–次日 08:00，整单 credits 乘系数）：
+    //             qwen3.8-max/flash 4 折；deepseek-v4-pro-0813/v4-flash-0731/v4.1-flash(-1017) 5 折。
+    //             ※ 对拍洞察：deepseek 系 5 折 × 忙时刊例价 恰等于其闲时刊例价（2×0.5=1、8×0.5=4、
+    //             9×0.5=4.5、27×0.5=13.5、3×0.5=1.5、9×0.5=4.5），故 base 填忙时价 + night:0.5 自洽。
+    //   preview   qwen4-max-preview 预览期官方 2 折（2026-11-11 10:00 ~ 11-25 24:00 北京），夜间再 4 折
+    //             （官方明示叠加后 0.8 折 = 0.2×0.4）。预览版无独立刊例价，按 qwen4-max 刊例价计（assumedBase 标注）。
+    //   bailianPeak  百炼按量渠道（dashscope）专用：该模型按忙/闲时计价（忙 08:00–22:00 北京），
+    //             闲时价 = 忙时价 × night。Token Plan 渠道不受此标记影响（走 night 折扣语义）。
+    //   assumedBase  刊例价为同系推断（仅预览版），面板会标注"估算"。
+    // 数组顺序 = 匹配优先级：长名/带后缀的排前面（qwen4-max-preview 先于 qwen4-max，
+    //   deepseek-v4-pro-0813 先于 deepseek-v4-pro，glm-5.3/5.2/5.1 先于 glm-5）。
+    // 未入表的 Token Plan 模型（图像/视频/语音/decision-model-preview 等）→ 不显示金额（不猜）。
+    // ════════════════════════════════════════════════════════════════════
+    tokenplan: {
+      models: [
+        { keys: ["qwen4-max-preview", "qwen4.0-max-preview"], assumedBase: true,
+          tiers: [{ upTo: Infinity, input: 10, output: 30, cacheHit: 0.5 }],
+          preview: { start: Date.UTC(2026, 10, 11, 2, 0, 0), end: Date.UTC(2026, 10, 25, 16, 0, 0), factor: 0.2 }, night: 0.4 },
+        { keys: ["qwen4-max"], tiers: [{ upTo: Infinity, input: 10, output: 30, cacheHit: 0.5 }] },
+        { keys: ["qwen3.8-max"], tiers: [{ upTo: Infinity, input: 12, output: 36, cacheHit: 1.5 }], night: 0.4 },
+        { keys: ["qwen3.8-flash"], tiers: [{ upTo: Infinity, input: 0.8, output: 2.7 }], night: 0.4 },
+        { keys: ["qwen3.7-max"], tiers: [{ upTo: Infinity, input: 12, output: 36 }] },
+        { keys: ["qwen3.7-plus"], tiers: [{ upTo: 256000, input: 2, output: 8 }, { upTo: Infinity, input: 6, output: 24 }] },
+        { keys: ["qwen3.6-plus"], tiers: [{ upTo: 256000, input: 2, output: 12, cacheHit: 0.2 }, { upTo: Infinity, input: 8, output: 48 }] },
+        { keys: ["qwen3.6-flash"], tiers: [{ upTo: 256000, input: 1.2, output: 7.2 }, { upTo: Infinity, input: 4.8, output: 28.8 }] },
+        { keys: ["deepseek-v4.1-flash"], tiers: [{ upTo: Infinity, input: 2, output: 8 }], night: 0.5, bailianPeak: true },
+        { keys: ["deepseek-v4-pro-0813"], tiers: [{ upTo: Infinity, input: 9, output: 27 }], night: 0.5, bailianPeak: true },
+        { keys: ["deepseek-v4-flash-0731"], tiers: [{ upTo: Infinity, input: 3, output: 9 }], night: 0.5, bailianPeak: true },
+        { keys: ["deepseek-v4-pro"], tiers: [{ upTo: Infinity, input: 12, output: 24 }] },
+        { keys: ["glm-5.3"], tiers: [{ upTo: Infinity, input: 8, output: 28 }] },
+        { keys: ["glm-5.2"], tiers: [{ upTo: Infinity, input: 8, output: 28 }] },
+        { keys: ["glm-5.1"], tiers: [{ upTo: 32000, input: 6, output: 24 }, { upTo: Infinity, input: 8, output: 28 }] },
+        { keys: ["glm-5"], tiers: [{ upTo: 32000, input: 4, output: 18 }, { upTo: Infinity, input: 6, output: 22 }] },
+        { keys: ["kimi-k2.7-code"], tiers: [{ upTo: Infinity, input: 6.5, output: 27 }] },
+        { keys: ["kimi-k2.6"], tiers: [{ upTo: Infinity, input: 6.5, output: 27, cacheHit: 1.1 }] },
+        { keys: ["kimi-k2.5"], tiers: [{ upTo: Infinity, input: 4, output: 21 }] },
+        { keys: ["minimax-m2.5"], tiers: [{ upTo: Infinity, input: 2.1, output: 8.4, cacheHit: 0.21 }] }
+      ],
+      // 官方夜间折扣窗口：北京时间 22:00–次日 08:00（用 UTC+8 换算，与用户本机时区无关）
+      nightWindow: [22, 8]
+    }
   };
-  // v1.18.0 · 运行时覆盖层（v1.19.0 扩展）：localStorage["qp_token_speed_pricing"] 放一份 JSON 即可
-  // 加模型/调价/接渠道，不用改源码重建。用户条目合并进对应表并排在最前（优先命中）；JSON 解析失败/
-  // 结构不对 → 整份忽略并 console.warn，内置表原样生效，绝不因此崩面板。支持字段：
+  // v1.20.0：Token Plan 个人版套餐档位（官方 2026-11-16 页：Pro 降价至 312 元/月、额度上调）
+  // 用于面板"套餐摊销"：credits × (月费/月额度) = 按订阅实际付出的人民币成本
+  var TP_PLANS = [
+    { id: "lite", name: "Lite", price: 39, quota: 20000 },
+    { id: "essential", name: "Essential", price: 79, quota: 45000 },
+    { id: "standard", name: "Standard", price: 139, quota: 80000 },
+    { id: "pro", name: "Pro", price: 312, quota: 200000 }
+  ];
+  // v1.18.0 · 运行时覆盖层（v1.19.0 扩展 / v1.20.0 加 tokenplan.models）：
+  // localStorage["qp_token_speed_pricing"] 放一份 JSON 即可加模型/调价/接渠道，不用改源码重建。
+  // 用户条目合并进对应表并排在最前（优先命中）；JSON 解析失败/结构不对 → 整份忽略并 console.warn，
+  // 内置表原样生效，绝不因此崩面板。支持字段：
   //   plan.base / plan.promo（旧键名 afp.* 仍兼容）/ deepseek.models（数组，前置合并）、
   //   deepseek.peakHours（替换）、deepseek.weekendOffPeak（替换）、alias.keys（前置合并）、
-  //   generic.models / customChannels（整体提供）
+  //   generic.models / customChannels（整体提供）、tokenplan.models（前置合并，须带合法 tiers）
   (function applyPricingOverlay() {
     var raw = null;
     try { raw = localStorage.getItem("qp_token_speed_pricing"); } catch (e) { return; }
@@ -556,6 +731,18 @@
       }
       return true;
     }
+    // v1.20.0：tokenplan 条目必须带 tiers 数组且每档 input/output 为数字（防坏覆盖层把计价算崩）
+    function tpArr(a) {
+      if (!entryArr(a)) return false;
+      for (var i = 0; i < a.length; i++) {
+        var ts = a[i].tiers;
+        if (Object.prototype.toString.call(ts) !== "[object Array]" || !ts.length) return false;
+        for (var j = 0; j < ts.length; j++) {
+          if (!ts[j] || typeof ts[j].input !== "number" || typeof ts[j].output !== "number") return false;
+        }
+      }
+      return true;
+    }
     try {
       if (u.plan && entryArr(u.plan.base)) PRICING.plan.base = u.plan.base.concat(PRICING.plan.base);
       if (u.plan && promoArr(u.plan.promo)) PRICING.plan.promo = u.plan.promo.concat(PRICING.plan.promo);
@@ -567,6 +754,7 @@
       if (u.alias && entryArr(u.alias.keys)) PRICING.alias.keys = u.alias.keys.concat(PRICING.alias.keys);
       if (u.generic && entryArr(u.generic.models)) PRICING.generic.models = u.generic.models;
       if (entryArr(u.customChannels)) PRICING.customChannels = u.customChannels;
+      if (u.tokenplan && tpArr(u.tokenplan.models)) PRICING.tokenplan.models = u.tokenplan.models.concat(PRICING.tokenplan.models);
     } catch (e) { console.warn("[token-speed] pricing 覆盖层应用失败，使用内置价目", e); }
   })();
 
@@ -708,13 +896,122 @@
     }
     return null;
   }
-  // 计价（v1.18.0 泛化 / v1.19.0 补完）：deepseek 渠道用官方价表；其他渠道查 PRICING.generic.models
+
+  // ════════════════════════════════════════════════════════════
+  // v1.20.0 · Token Plan credits 计价引擎
+  // ════════════════════════════════════════════════════════════
+  // 北京时间小时（UTC+8 换算，与本机时区无关——用户在哪都按官方北京时段判）
+  function beijingHour(t) {
+    return new Date((t == null ? Date.now() : t) + 8 * 3600 * 1000).getUTCHours();
+  }
+  // Token Plan 官方夜间折扣窗口 [22, 8)：22:00–次日 08:00 北京
+  function tpNightActive(t) {
+    var w = PRICING.tokenplan.nightWindow || [22, 8];
+    var h = beijingHour(t);
+    return w[0] > w[1] ? (h >= w[0] || h < w[1]) : (h >= w[0] && h < w[1]);
+  }
+  function tokenplanEntryFor(model) {
+    if (!model) return null;
+    var m = String(model).toLowerCase();
+    var ms = PRICING.tokenplan.models;
+    for (var i = 0; i < ms.length; i++) {
+      var ks = ms[i].keys || [];
+      for (var j = 0; j < ks.length; j++) {
+        if (!ks[j]) continue;
+        if (ms[i].exact ? (m === String(ks[j]).toLowerCase()) : (m.indexOf(String(ks[j]).toLowerCase()) >= 0)) return ms[i];
+      }
+    }
+    return null;
+  }
+  function isTokenPlanAuto(model) { return modelBaseName(model) === "auto"; }
+  // 当前生效折扣系数与文案（预览期 × 夜间，官方明示可叠加：0.2×0.4=0.08）
+  function tpFactor(entry, t) {
+    var f = 1, notes = [];
+    if (entry.preview && t >= entry.preview.start && t < entry.preview.end) {
+      f *= entry.preview.factor;
+      notes.push("预览期 " + Math.round(entry.preview.factor * 10) + " 折");
+    }
+    if (entry.night && tpNightActive(t)) {
+      f *= entry.night;
+      notes.push("夜间 " + (entry.night * 10).toFixed(1).replace(/\.0$/, "") + " 折");
+    }
+    return { factor: f, note: notes.join(" · ") };
+  }
+  // 按输入 token 数选阶梯（官方：单次请求的输入 Token 数决定档位）
+  function tpTier(entry, promptTok) {
+    var ts = entry.tiers;
+    for (var i = 0; i < ts.length; i++) {
+      if ((promptTok || 0) <= ts[i].upTo) return { tier: ts[i], idx: i };
+    }
+    return { tier: ts[ts.length - 1], idx: ts.length - 1 };
+  }
+  // 单条目 credits 计算（供主计算与 auto 区间共用）。返回三分量明细 + 折扣 + 估算标记。
+  function tpCalcEntry(entry, promptTok, completionTok, cacheHitTok, t) {
+    var pt = promptTok || 0, ct = completionTok || 0;
+    var hit = Math.max(0, Math.min(cacheHitTok || 0, pt));
+    var sel = tpTier(entry, pt);
+    var tier = sel.tier;
+    var cacheRate = tier.cacheHit != null ? tier.cacheHit : tier.input; // 未公布缓存价 → 按输入价估（面板标注）
+    var fac = tpFactor(entry, t);
+    var inCr = (pt - hit) * tier.input / 10000;
+    var caCr = hit * cacheRate / 10000;
+    var outCr = ct * tier.output / 10000;
+    return {
+      credits: (inCr + caCr + outCr) * fac.factor,
+      input: inCr * fac.factor, cache: caCr * fac.factor, output: outCr * fac.factor,
+      factor: fac.factor, factorNote: fac.note, tierIdx: sel.idx,
+      cacheAssumed: tier.cacheHit == null && hit > 0,
+      assumedBase: !!entry.assumedBase
+    };
+  }
+  // Token Plan 主计算：渠道不对/模型不在表 → null（不猜）。auto → null（走区间）。
+  function calcTokenPlan(model, promptTok, completionTok, cacheHitTok, t) {
+    if (isTokenPlanAuto(model)) return null;
+    var entry = tokenplanEntryFor(model);
+    if (!entry) return null;
+    return tpCalcEntry(entry, promptTok, completionTok, cacheHitTok, t == null ? Date.now() : t);
+  }
+  // auto 智能路由：底层模型不定 → 给全表当前时刻的 [min, max] 参考区间（不假装精确，同别名口径）
+  function calcTokenPlanRange(model, promptTok, completionTok, cacheHitTok, t) {
+    if (!isTokenPlanAuto(model)) return null;
+    var ms = PRICING.tokenplan.models, lo = null, hi = null;
+    var tt = t == null ? Date.now() : t;
+    for (var i = 0; i < ms.length; i++) {
+      var c = tpCalcEntry(ms[i], promptTok, completionTok, cacheHitTok, tt).credits;
+      if (lo == null || c < lo) lo = c;
+      if (hi == null || c > hi) hi = c;
+    }
+    if (lo == null) return null;
+    return { lo: lo, hi: hi };
+  }
+  // 百炼按量（dashscope 渠道，人民币）：同一张刊例价表，单位换回元/百万tok。
+  // 仅 bailianPeak 标记的模型按忙/闲时（忙 08–22 北京，闲时=忙时×night，与官方闲时价对拍一致）；
+  // 其余模型恒刊例价。Token Plan 的夜间/预览折扣不适用于按量渠道（两套体系，官方明示相互独立）。
+  function calcDashscope(model, promptTok, completionTok, cacheHitTok, t) {
+    var entry = tokenplanEntryFor(model);
+    if (!entry) return null;
+    var tt = t == null ? Date.now() : t;
+    var pt = promptTok || 0, ct = completionTok || 0;
+    var hit = Math.max(0, Math.min(cacheHitTok || 0, pt));
+    var tier = tpTier(entry, pt).tier;
+    var f = (entry.bailianPeak && tpNightActive(tt)) ? entry.night : 1;
+    var cacheRate = tier.cacheHit != null ? tier.cacheHit : tier.input;
+    return ((pt - hit) * tier.input + hit * cacheRate + ct * tier.output) / 1e6 * f;
+  }
+
+  // 计价（v1.18.0 泛化 / v1.19.0 补完 / v1.20.0 加 tokenplan/dashscope）：
+  // deepseek 渠道用官方价表；tokenplan 用 credits 表；dashscope 用刊例价按量；其他渠道查 PRICING.generic.models
   // ——条目带 coef → 套餐模式（额度=(入+出)×系数/10000，与 plan 渠道同口径）；带 table → 按量模式
   // （元/百万；cacheHit/peak 可选：缺 cacheHit 按输入价计缓存部分，缺 peak 恒低谷）。没配条目 → null，不猜。
   function calcCost(channel, model, promptTok, completionTok, cacheHitTok) {
     var ch = String(channel || "");
     if (ch === "afp") ch = "plan"; // 旧历史数据渠道名兼容
     if (!ch || ch === "plan") return null; // 套餐渠道的额度走 calcPlan，不在这里
+    if (ch === "tokenplan") {
+      var tp = calcTokenPlan(model, promptTok, completionTok, cacheHitTok);
+      return tp ? tp.credits : null;
+    }
+    if (ch === "dashscope") return calcDashscope(model, promptTok, completionTok, cacheHitTok);
     var pt = promptTok || 0, ct = completionTok || 0;
     var t = (ch === "deepseek") ? priceTableFor(model) : (genericEntryFor(ch, model) || {}).table;
     if (t && t.offPeak && t.offPeak.input != null && t.offPeak.output != null) {
@@ -728,12 +1025,14 @@
     if (e && e.coef != null) return ((pt + ct) * e.coef) / 10000;
     return null;
   }
-  // 该渠道金额的显示单位（v1.19.0）：plan=套餐额度 / cny=人民币；旧数据无此字段按 cny 显示，零迁移
+  // 该渠道金额的显示单位（v1.19.0 / v1.20.0 加 credits）：plan=套餐额度 / cny=人民币 / credits=百炼 Credits
+  // 旧数据无此字段按 cny 显示，零迁移
   function costUnitFor(channel, model) {
     var ch = String(channel || "");
     if (ch === "afp") ch = "plan";
     if (!ch || ch === "plan") return "";
-    if (ch === "deepseek") return "cny";
+    if (ch === "deepseek" || ch === "dashscope") return "cny";
+    if (ch === "tokenplan") return "credits";
     var e = genericEntryFor(ch, model);
     return (e && e.coef != null) ? "plan" : "cny";
   }
@@ -743,7 +1042,7 @@
     var c = String(ch || "").toLowerCase();
     if (c === "afp") c = "plan";
     if (!c) return false;
-    if (c === "deepseek") return true;
+    if (c === "deepseek" || c === "tokenplan" || c === "dashscope") return true;
     if (c === "plan") return false; // 套餐渠道走 coefMissing 提示，不算"无价表"
     var g = (PRICING.generic && PRICING.generic.models) || [];
     for (var i = 0; i < g.length; i++) {
@@ -754,6 +1053,7 @@
 
   // 金额相关字段（bar/面板/实时快照共用一份口径，避免三处漂移）
   // v1.19.0：channel 入参先归一（旧历史数据 "afp" → "plan"）再查价；新增 costUnit 供 UI 选单位
+  // v1.20.0：tokenplan 渠道返回 tp 三分量明细/折扣/阶梯/估算标记；auto 给 tpLo/tpHi 参考区间
   function moneyFields(channel, model, promptTok, completionTok, cacheHitTok) {
     var ch = channel || "";
     var chN = (ch === "afp") ? "plan" : ch;
@@ -761,6 +1061,11 @@
     var afp = calcPlan(chN, model, promptTok, completionTok);
     var alias = isAliasModel(model);
     var afpRange = calcPlanRange(chN, model, promptTok, completionTok);
+    var tp = null, tpRange = null;
+    if (chN === "tokenplan") {
+      tp = calcTokenPlan(model, promptTok, completionTok, cacheHitTok);
+      if (!tp) tpRange = calcTokenPlanRange(model, promptTok, completionTok, cacheHitTok);
+    }
     return {
       channel: ch,
       afp: afp,
@@ -773,9 +1078,14 @@
       coefRange: !!afpRange,
       // 渠道=套餐但模型不在系数表且不是路由别名 → 面板提示"系数未知"
       coefMissing: chN === "plan" && afp == null && !afpRange,
-      // 渠道配过价表但这模型算不出钱 → 面板提示"无价表"
-      priceMissing: channelHasPriceTable(chN) && cost == null,
-      provider: (activeLlm && activeLlm.providerId) || ""
+      // 渠道配过价表但这模型算不出钱 → 面板提示"无价表"（auto 有区间时不算缺）
+      priceMissing: channelHasPriceTable(chN) && cost == null && !tpRange,
+      provider: (activeLlm && activeLlm.providerId) || "",
+      // v1.20.0 Token Plan 明细（其他渠道为 null，UI 判空渲染）
+      tp: tp,
+      tpLo: tpRange ? tpRange.lo : null,
+      tpHi: tpRange ? tpRange.hi : null,
+      tpRange: !!tpRange
     };
   }
 
@@ -927,6 +1237,8 @@
     st.totalGenerated = 0;
     st.lastSpeed = 0;        // v1.7.0
     st.replayEndSeen = false; // v1.7.0
+    st.speedHist = [];        // v1.20.0 sparkline 逐轮重置
+    st.lastSpeedSampleT = 0;
     // v1.8.0 计费渠道/收尾取证逐轮重置（否则上一轮的 provider 会在本轮 usage 到达前
     // 冒充本轮的渠道证据）
     st.providerUsage = "";
@@ -1321,6 +1633,30 @@
     return (st && st.channel) || "";
   }
 
+  // v1.20.0 燃烧率：按当前解码速度，每分钟烧掉多少（credits/min 或 ¥/h）。
+  // 只算输出侧——输入是请求时一次性计费，不属于流式期间的"燃烧"。无价表 → null（不猜）。
+  function burnRateOf(channel, model, speed, promptTok) {
+    if (!(speed > 0)) return null;
+    var ch = String(channel || "");
+    if (ch === "tokenplan") {
+      var e = tokenplanEntryFor(model);
+      if (!e) return null;
+      var tier = tpTier(e, promptTok || 0).tier;
+      var f = tpFactor(e, Date.now()).factor;
+      return { value: speed * tier.output / 10000 * 60 * f, unit: "credits/min" };
+    }
+    var outPrice = null;
+    if (ch === "deepseek") {
+      var t = priceTableFor(model);
+      if (t) outPrice = ((isPeakHour(t) && t.peak) ? t.peak : t.offPeak).output;
+    } else if (ch === "dashscope") {
+      var de = tokenplanEntryFor(model);
+      if (de) outPrice = tpTier(de, promptTok || 0).tier.output * ((de.bailianPeak && tpNightActive(Date.now())) ? de.night : 1);
+    }
+    if (outPrice == null) return null;
+    return { value: speed * outPrice / 1e6 * 3600, unit: "¥/h" };
+  }
+
   // v1.7.0：三处"生成中"渲染（tick / 停顿补测 / 会话切换刷新）共用同一份视图数据，
   // 避免口径各写一份漂移（旧版会话切换后的刷新会丢 attached 标记、速度显示 0）
   function observedWaitMs(st) {
@@ -1333,9 +1669,13 @@
     var _tool = st.toolTokens || 0;
     var _costTok = st.tokenCount + _tool + _replay; // v1.12.0：实时金额含工具参数
     var _ch = channelOf(st);
+    // v1.20.0：实时金额统一走 moneyFields（与 endTurn/liveSnapshot 同源，杜绝三处各写一份漂移）
+    var _m = moneyFields(_ch, st.model, st.promptTokens, _costTok, st.cacheHitTokens);
+    var _speed = (typeof opts.speed === "number") ? opts.speed : (st.lastSpeed || 0);
     return {
       ttft: st.attached ? 0 : st.ttft,
-      speed: (typeof opts.speed === "number") ? opts.speed : (st.lastSpeed || 0),
+      speed: _speed,
+      model: st.model,
       tokens: _costTok,     // 已生成 = 回放 + 接入后（总量口径，不含工具参数）
       toolTokens: _tool,                   // v1.12.0 工具参数单列
       attached: st.attached,
@@ -1346,9 +1686,18 @@
       pauseSec: observedWaitMs(st) / 1000,
       modelWaitSec: (st.modelWaitMs + (st.toolResumeAt ? Math.max(0, now() - st.toolResumeAt) : 0)) / 1000,
       channel: _ch,
-      cost: calcCost(_ch, st.model, st.promptTokens, _costTok, st.cacheHitTokens),
-      costUnit: costUnitFor(_ch, st.model),
-      afp: calcPlan(_ch, st.model, st.promptTokens, _costTok)
+      cost: _m.cost,
+      costUnit: _m.costUnit,
+      afp: _m.afp,
+      afpLo: _m.afpLo,
+      afpHi: _m.afpHi,
+      coefRange: _m.coefRange,
+      // v1.20.0 TokenPlan 明细 / auto 区间 / 燃烧率（其他渠道 tp=null，UI 判空）
+      tp: _m.tp,
+      tpLo: _m.tpLo,
+      tpHi: _m.tpHi,
+      tpRange: _m.tpRange,
+      burnRate: burnRateOf(_ch, st.model, _speed, st.promptTokens)
     };
   }
 
@@ -1393,6 +1742,12 @@
     }
     if (speed > st.peakMax) st.peakMax = speed;
     st.lastSpeed = speed; // v1.7.0：详情面板实时刷新要显示这个速率
+    // v1.20.0：sparkline 采样（≥200ms 一点，环形 120 点 ≈ 最近 24s+ 的速度轨迹）
+    if (t - (st.lastSpeedSampleT || 0) >= 200) {
+      st.lastSpeedSampleT = t;
+      st.speedHist.push([t, speed]);
+      if (st.speedHist.length > 120) st.speedHist.shift();
+    }
     if (st.__sid === getSessionId()) {
       renderRunning(runningView(st));
     }
@@ -1586,6 +1941,11 @@
       afpLo: _money.afpLo,
       afpHi: _money.afpHi,
       coefRange: _money.coefRange,
+      // v1.20.0 TokenPlan credits 三分量明细 / auto 参考区间（其他渠道为 null）
+      tp: _money.tp,
+      tpLo: _money.tpLo,
+      tpHi: _money.tpHi,
+      tpRange: _money.tpRange,
       errMsg: st.errMsg || "",
       endCause: st.endCause || "",
       model: st.model,
@@ -1634,11 +1994,13 @@
     if (st.endCause !== "page_refresh") {
       flushCensus();
       saveLastResult(st.__sid, st.lastResult); // 按流所属会话存
+      appendLedger(st.__sid, st.lastResult);   // v1.20.0 会话账本（sid+messageId upsert，刷新恢复不重复计账）
       if (st.__sid === getSessionId()) renderDone(st.lastResult);
     }
     // 释放大字段
     st.fullText = ""; st.seenFullText = ""; st.window = []; st.segments = [];
     st.textSnapshots = Object.create(null); st.evWin = []; st.probeWin = []; st.replayWin = [];
+    st.speedHist = []; // v1.20.0
   }
 
   // ════════════════════════════════════════════════════════════
@@ -1808,9 +2170,15 @@
   }
 
   function monitorStream(resp, t0, st, epoch) {
-    if (!st || st.epoch > epoch) return;
-    if (st.epoch !== epoch || !st.active) startTurn(t0, st, epoch);
     var reader = resp.body.getReader();
+    // v1.20.0 stability: even for stale/missing state we must cancel the clone we hold.
+    // Response.clone() tees the stream: a branch never read AND never cancelled buffers
+    // the entire response body in memory (leak on stop-and-resend / fast route switches).
+    if (!st || st.epoch > epoch) {
+      try { Promise.resolve(reader.cancel()).catch(function () {}); } catch (e) { /* ignore */ }
+      return;
+    }
+    if (st.epoch !== epoch || !st.active) startTurn(t0, st, epoch);
     var decoder = new TextDecoder();
     var buf = "", lines = [], eventType = "", ended = false, receivedAt = 0;
     function stale() { return st.epoch !== epoch; }
@@ -1867,6 +2235,12 @@
         }
         receivedAt = now();
         buf += decoder.decode(result.value, {stream: true});
+        // v1.20.0 stability: cap an unterminated SSE line at 4MB. A pathological gateway
+        // must not grow the buffer without bound and drag the whole page down with it.
+        if (buf.length > 4194304) {
+          finishAbnormal(st, "SSE buffer overflow", "read_error");
+          cancel(); return;
+        }
         consume(false);
         if (stale() || ended) { cancel(); return; }
         pump();
@@ -1958,6 +2332,7 @@
       model: usage.model, provider: usage.provider, channel: channel.channel, channelSrc: "usage",
       cost: money.cost, costUnit: money.costUnit, afp: money.afp, coefMissing: money.coefMissing, priceMissing: money.priceMissing,
       aliasModel: money.aliasModel, coefRange: money.coefRange, afpLo: money.afpLo, afpHi: money.afpHi,
+      tp: money.tp, tpLo: money.tpLo, tpHi: money.tpHi, tpRange: money.tpRange,
       status: aborted ? "abort" : DONE, endCause: aborted ? "user_stop" : "history", errMsg: "",
       ttft: 0, seconds: isFinite(start) && isFinite(end) && end >= start ? (end - start) / 1000 : 0,
       secondsKnown: isFinite(start) && isFinite(end) && end >= start,
@@ -1965,6 +2340,7 @@
       attached: false, replayTokens: 0, totalGenerated: usage.generated, liveTokens: 0
     };
     saveLastResult(sid, result);
+    appendLedger(sid, result); // v1.20.0: history-restored turns enter the ledger too (turnKey upsert, no double count)
     if (sid === getSessionId()) { refreshBarContent(); refreshDetail(result); }
   }
 
@@ -2011,10 +2387,12 @@
       var pt = r.promptTokens != null ? r.promptTokens : ((r.cacheHit || 0) + (r.cacheMiss || 0));
       var ct = r.costTokens != null ? r.costTokens : r.tokens;
       var money = moneyFields(cur.channel, r.model, pt, ct, r.cacheHit || 0);
+      // v1.20.0: credits breakdown / discount / auto-range participate in the change signature too
+      function tpSig(x) { return x.tp ? (x.tp.credits + ":" + x.tp.factor) : (x.tpRange ? ("r:" + x.tpLo + ":" + x.tpHi) : "n"); }
       var before = [r.cost == null ? "n" : r.cost, r.afp == null ? "n" : r.afp, r.channel || "",
-        r.afpLo == null ? "n" : r.afpLo, r.afpHi == null ? "n" : r.afpHi].join("|");
+        r.afpLo == null ? "n" : r.afpLo, r.afpHi == null ? "n" : r.afpHi, tpSig(r)].join("|");
       var after = [money.cost == null ? "n" : money.cost, money.afp == null ? "n" : money.afp, money.channel,
-        money.afpLo == null ? "n" : money.afpLo, money.afpHi == null ? "n" : money.afpHi].join("|");
+        money.afpLo == null ? "n" : money.afpLo, money.afpHi == null ? "n" : money.afpHi, tpSig(money)].join("|");
       if (before === after) return;
       r.cost = money.cost;
       r.afp = money.afp;
@@ -2028,65 +2406,118 @@
       r.afpHi = money.afpHi;
       r.costUnit = money.costUnit;
       r.coefRange = money.coefRange;
+      r.tp = money.tp; r.tpLo = money.tpLo; r.tpHi = money.tpHi; r.tpRange = money.tpRange;
       saveLastResult(sid2, r);
+      appendLedger(sid2, r); // v1.20.0: keep the ledger amount in sync after retroactive re-pricing
       refreshBarContent();
       refreshDetail(r);
     } catch (e) { /* 金额补算失败不影响统计 */ }
   }
 
-  // Token Speed 1.17 · scoped visual system
+  // Token Speed 1.20 · Instrument Deck visual system
+  // 设计语言：炭黑玻璃底 + 三色语义（薄荷=速度 / 金=Credits / 蓝=输出），
+  // 悬浮条是仪表条，面板是飞行数据读数。所有颜色走 CSS 变量，dream-skin 磨砂兼容块原样保留。
   var styles = `
-    #qp-token-speed-bar, #qp-token-speed-detail { box-sizing:border-box; font-family:Inter,"Segoe UI","Microsoft YaHei",sans-serif; font-variant-numeric:tabular-nums; color:#edf3ff; line-height:1.5; }
-    #qp-token-speed-bar { position:fixed; z-index:50; display:flex; align-items:center; gap:16px; width:max-content; max-width:calc(100vw - 24px); padding:9px 12px 9px 16px; border-radius:16px; border:1px solid #ffffff22; background:rgba(19,26,43,.96); box-shadow:0 8px 28px #0005; cursor:pointer; user-select:none; font-size:12px; white-space:nowrap; backdrop-filter:blur(18px); }
-    #qp-token-speed-bar:hover { border-color:#86b7ff66; background:#1c2940; }
-    #qp-token-speed-bar:focus-visible { outline:2px solid #9bc1ff; outline-offset:3px; }
-    #qp-token-speed-bar .qp-ts-state { display:inline-flex; align-items:center; gap:7px; color:#bcc9df; font-size:11px; }
+    #qp-token-speed-bar, #qp-token-speed-detail {
+      --qp-bg: rgba(16,22,31,.96); --qp-panel: #131b26; --qp-ink: #eef3fa; --qp-mut: #8b99ad;
+      --qp-mint: #7fe7c4; --qp-blue: #8fb8ff; --qp-gold: #ffd479; --qp-warn: #f6ce9e; --qp-err: #ff9d9d;
+      --qp-line: #ffffff14;
+      box-sizing:border-box; font-family:Inter,"Segoe UI","Microsoft YaHei",sans-serif; font-variant-numeric:tabular-nums; color:var(--qp-ink); line-height:1.5;
+    }
+    /* ── 悬浮条：仪表条 ── */
+    #qp-token-speed-bar { position:fixed; z-index:50; display:flex; align-items:center; gap:14px; width:max-content; max-width:calc(100vw - 24px); padding:7px 10px 7px 14px; border-radius:14px; border:1px solid #ffffff1f; background:var(--qp-bg); box-shadow:0 8px 28px #0006; cursor:pointer; user-select:none; font-size:12px; white-space:nowrap; backdrop-filter:blur(18px); overflow:hidden; }
+    #qp-token-speed-bar::after { content:""; position:absolute; left:0; right:0; top:0; height:1px; background:linear-gradient(90deg,transparent,#7fe7c455,transparent); opacity:0; }
+    #qp-token-speed-bar.running::after { opacity:1; animation:qp-ts-scan 2.4s linear infinite; }
+    @keyframes qp-ts-scan { 0% { transform:translateX(-60%); } 100% { transform:translateX(60%); } }
+    #qp-token-speed-bar:hover { border-color:#7fe7c455; background:#182230; }
+    #qp-token-speed-bar:focus-visible { outline:2px solid var(--qp-mint); outline-offset:3px; }
+    #qp-token-speed-bar .qp-ts-state { display:inline-flex; align-items:center; gap:7px; color:#bcc9df; font-size:11px; flex-shrink:0; }
     #qp-token-speed-bar .qp-ts-dot { width:6px; height:6px; flex-shrink:0; border-radius:50%; background:#8d9bb4; }
-    #qp-token-speed-bar.done .qp-ts-dot { background:#93b9ff; }
-    #qp-token-speed-bar.running .qp-ts-dot { background:#6ce0c2; animation:qp-ts-pulse 1.6s infinite; }
-    #qp-token-speed-bar.abort .qp-ts-dot, #qp-token-speed-bar.error .qp-ts-dot { background:#ffbb86; }
+    #qp-token-speed-bar.done .qp-ts-dot { background:var(--qp-blue); }
+    #qp-token-speed-bar.running .qp-ts-dot { background:var(--qp-mint); animation:qp-ts-pulse 1.6s infinite; }
+    #qp-token-speed-bar.abort .qp-ts-dot { background:var(--qp-warn); }
+    #qp-token-speed-bar.error .qp-ts-dot { background:var(--qp-err); }
+    #qp-token-speed-bar .qp-ts-model { max-width:150px; overflow:hidden; text-overflow:ellipsis; color:#9fb0c8; font-size:11px; border-left:1px solid var(--qp-line); padding-left:12px; }
     #qp-token-speed-bar .qp-ts-item { display:inline-flex; align-items:baseline; gap:6px; }
     #qp-token-speed-bar .qp-ts-label { color:#aab8ce; font-size:11px; }
     #qp-token-speed-bar .qp-ts-val { font-weight:600; color:#f2f6ff; }
-    #qp-token-speed-bar .qp-ts-speed .qp-ts-val { color:#91e8d4; font-size:18px; letter-spacing:-.4px; }
+    #qp-token-speed-bar .qp-ts-speed .qp-ts-val { color:var(--qp-mint); font-size:18px; letter-spacing:-.4px; }
     #qp-token-speed-bar .qp-ts-unit { color:#aab8ce; font-size:10px; font-weight:400; margin-left:3px; }
-    #qp-token-speed-bar .qp-ts-more { padding:4px 8px; border-radius:8px; color:#d7e6ff; background:#ffffff0c; font-size:11px; }
-    #qp-token-speed-bar .qp-ts-extra { border-left:1px solid #ffffff18; padding-left:14px; }
+    #qp-token-speed-bar .qp-ts-cost { padding:2px 8px; border-radius:8px; border:1px solid var(--qp-line); background:#ffffff07; }
+    #qp-token-speed-bar .qp-ts-cost .qp-ts-val { font-size:12px; }
+    #qp-token-speed-bar .qp-ts-cost.credits { border-color:#ffd47930; }
+    #qp-token-speed-bar .qp-ts-cost.credits .qp-ts-val { color:var(--qp-gold); }
+    #qp-token-speed-bar .qp-ts-cost.cny .qp-ts-val { color:#a8ecd9; }
+    #qp-token-speed-bar .qp-ts-cost.plan .qp-ts-val { color:var(--qp-blue); }
+    #qp-token-speed-bar .qp-ts-more { padding:4px 8px; border-radius:8px; color:#d7e6ff; background:#ffffff0c; font-size:11px; flex-shrink:0; }
+    #qp-token-speed-bar .qp-ts-extra { border-left:1px solid var(--qp-line); padding-left:12px; }
     @keyframes qp-ts-pulse { 50% { opacity:.4; } }
-    #qp-token-speed-detail { position:fixed; z-index:100; top:50%; left:50%; transform:translate(-50%,-50%); width:700px; max-width:calc(100vw - 32px); max-height:calc(100dvh - 48px); overflow:auto; padding:26px; border-radius:24px; border:1px solid #ffffff26; background:#141e30; box-shadow:0 24px 100px #0009; font-size:13px; scrollbar-width:thin; scrollbar-color:#42516c transparent; }
+    /* ── 详情面板：飞行数据读数 ── */
+    #qp-token-speed-detail { position:fixed; z-index:100; top:50%; left:50%; transform:translate(-50%,-50%); width:720px; max-width:calc(100vw - 32px); max-height:calc(100dvh - 48px); overflow:auto; padding:24px; border-radius:22px; border:1px solid #ffffff22; background:var(--qp-panel); box-shadow:0 24px 100px #000a; font-size:13px; scrollbar-width:thin; scrollbar-color:#42516c transparent; }
     #qp-token-speed-detail * { box-sizing:border-box; }
-    #qp-token-speed-detail .qp-d-title { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:22px; }
-    #qp-token-speed-detail .qp-d-eyebrow { color:#9bb5db; letter-spacing:1.6px; font-size:10px; font-weight:600; margin-bottom:4px; }
+    #qp-token-speed-detail .qp-d-title { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:18px; }
+    #qp-token-speed-detail .qp-d-eyebrow { color:var(--qp-mint); letter-spacing:1.8px; font-size:10px; font-weight:600; margin-bottom:4px; opacity:.85; }
     #qp-token-speed-detail .qp-d-heading { font-size:21px; font-weight:650; letter-spacing:-.4px; }
     #qp-token-speed-detail .qp-d-meta { margin-top:6px; color:#9eadc5; font-size:12px; overflow-wrap:anywhere; }
     #qp-token-speed-detail .qp-d-tools { display:flex; align-items:center; gap:12px; flex-shrink:0; }
     #qp-token-speed-detail .qp-d-badge { display:inline-flex; align-items:center; gap:6px; color:#a8ecd9; background:#79dbb810; border:1px solid #79dbb82a; border-radius:7px; padding:3px 8px; font-size:11px; }
-    #qp-token-speed-detail .qp-d-badge.abort, #qp-token-speed-detail .qp-d-badge.error { color:#ffd4a8; background:#ffc28112; border-color:#ffc28130; }
+    #qp-token-speed-detail .qp-d-badge.abort { color:#ffd4a8; background:#ffc28112; border-color:#ffc28130; }
+    #qp-token-speed-detail .qp-d-badge.error { color:var(--qp-err); background:#ff9d9d10; border-color:#ff9d9d30; }
     #qp-token-speed-detail .qp-d-close { display:grid; place-items:center; width:30px; height:30px; border:1px solid #ffffff12; border-radius:9px; background:#ffffff05; color:#aebbd1; cursor:pointer; font-size:16px; line-height:1; }
     #qp-token-speed-detail .qp-d-close:hover { color:white; background:#ffffff14; }
-    #qp-token-speed-detail button:focus-visible { outline:2px solid #9bc1ff; outline-offset:2px; }
-    #qp-token-speed-detail .qp-d-hero { display:grid; grid-template-columns:1.1fr 1fr; gap:12px; margin-bottom:12px; }
-    #qp-token-speed-detail .qp-d-card { padding:19px 20px 16px; background:#ffffff04; border:1px solid #ffffff12; border-radius:16px; min-width:0; }
-    #qp-token-speed-detail .qp-d-card.speed { background:linear-gradient(125deg,#254d5645,#1d324215); border-color:#82e2cf36; }
+    #qp-token-speed-detail button:focus-visible, #qp-token-speed-detail select:focus-visible { outline:2px solid var(--qp-mint); outline-offset:2px; }
+    /* hero 三卡：速度 / 输出 / 计费 */
+    #qp-token-speed-detail .qp-d-hero { display:grid; grid-template-columns:1.15fr 1fr 1.1fr; gap:10px; margin-bottom:12px; }
+    #qp-token-speed-detail .qp-d-card { padding:16px 16px 13px; background:#ffffff04; border:1px solid #ffffff12; border-radius:15px; min-width:0; }
+    #qp-token-speed-detail .qp-d-card.speed { background:linear-gradient(125deg,#2a5a5245,#1d324215); border-color:#7fe7c436; }
+    #qp-token-speed-detail .qp-d-card.bill.credits { background:linear-gradient(125deg,#5a4a2a3d,#32281d15); border-color:#ffd47936; }
     #qp-token-speed-detail .qp-d-label { display:flex; align-items:center; justify-content:space-between; gap:8px; color:#b6c5db; font-size:12px; }
     #qp-token-speed-detail .qp-d-tag { padding:1px 5px; color:#a8c4ec; border:1px solid #8daedc35; border-radius:4px; font-size:10px; white-space:nowrap; }
-    #qp-token-speed-detail .qp-d-number { display:flex; align-items:baseline; gap:7px; margin:6px 0 4px; font-size:38px; font-weight:600; letter-spacing:-1.4px; line-height:1.35; color:#f3f7ff; }
-    #qp-token-speed-detail .speed .qp-d-number { color:#98edda; }
+    #qp-token-speed-detail .qp-d-number { display:flex; align-items:baseline; gap:6px; margin:6px 0 4px; font-size:34px; font-weight:600; letter-spacing:-1.2px; line-height:1.3; color:#f3f7ff; overflow-wrap:anywhere; }
+    #qp-token-speed-detail .speed .qp-d-number { color:var(--qp-mint); }
+    #qp-token-speed-detail .bill.credits .qp-d-number { color:var(--qp-gold); }
     #qp-token-speed-detail .qp-d-number small { font-size:12px; font-weight:400; letter-spacing:0; color:#9fadc3; }
     #qp-token-speed-detail .qp-d-caption { color:#98a9c1; font-size:11px; line-height:1.6; }
-    #qp-token-speed-detail .qp-d-timings { display:grid; grid-template-columns:repeat(4,1fr); border:1px solid #ffffff12; border-radius:13px; padding:14px 0; margin-bottom:22px; background:#0c142320; }
+    #qp-token-speed-detail .qp-d-burn { color:var(--qp-gold); font-size:11px; margin-top:2px; }
+    #qp-token-speed-detail .qp-d-disc { display:inline-block; padding:0 5px; margin-right:4px; border-radius:4px; color:#1a1408; background:var(--qp-gold); font-size:10px; font-weight:600; }
+    #qp-token-speed-detail .qp-spark { display:block; width:100%; height:38px; margin:4px 0 2px; }
+    /* 时间带 */
+    #qp-token-speed-detail .qp-d-timings { display:grid; grid-template-columns:repeat(4,1fr); border:1px solid #ffffff12; border-radius:13px; padding:13px 0; margin-bottom:18px; background:#0c142320; }
     #qp-token-speed-detail .qp-d-time { padding:0 14px; border-left:1px solid #ffffff10; }
     #qp-token-speed-detail .qp-d-time:first-child { border-left:0; }
     #qp-token-speed-detail .qp-d-time span { display:block; color:#99abc4; font-size:11px; }
     #qp-token-speed-detail .qp-d-time strong { display:block; margin-top:5px; font-size:17px; font-weight:550; color:#e3ecfb; }
+    /* 章节与用量网格 */
     #qp-token-speed-detail .qp-d-section { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 0 10px; font-size:12px; font-weight:600; color:#d8e4f7; }
     #qp-token-speed-detail .qp-d-section small { font-size:10px; color:#859ab8; font-weight:400; }
-    #qp-token-speed-detail .qp-d-usage { display:grid; grid-template-columns:1fr 1fr; gap:0 26px; padding:2px 0 16px; }
+    #qp-token-speed-detail .qp-d-usage { display:grid; grid-template-columns:1fr 1fr; gap:0 26px; padding:2px 0 14px; }
     #qp-token-speed-detail .qp-c { display:flex; justify-content:space-between; align-items:baseline; gap:12px; padding:7px 0; min-width:0; }
     #qp-token-speed-detail .qp-cl { color:#98abc5; font-size:12px; }
     #qp-token-speed-detail .qp-cv { text-align:right; color:#e0eafd; font-size:12px; overflow-wrap:anywhere; }
-    #qp-token-speed-detail .qp-d-explain { color:#91a4c0; font-size:11px; line-height:1.7; border-top:1px solid #ffffff12; padding-top:12px; margin-bottom:20px; }
-    #qp-token-speed-detail .qp-d-note { font-size:11px; color:#f6ce9e; background:#e9a55e0b; border:1px solid #dba66d2a; border-radius:9px; padding:8px 11px; margin-bottom:12px; line-height:1.6; }
+    /* Credits 三分量条 */
+    #qp-token-speed-detail .qp-tp { padding:2px 0 14px; }
+    #qp-token-speed-detail .qp-tp-row { display:grid; grid-template-columns:44px 1fr 72px; align-items:center; gap:10px; padding:4px 0; }
+    #qp-token-speed-detail .qp-tp-l { color:#98abc5; font-size:11px; }
+    #qp-token-speed-detail .qp-tp-track { height:8px; border-radius:4px; background:#ffffff0a; overflow:hidden; }
+    #qp-token-speed-detail .qp-tp-fill { display:block; height:100%; border-radius:4px; }
+    #qp-token-speed-detail .qp-tp-fill.in { background:var(--qp-blue); }
+    #qp-token-speed-detail .qp-tp-fill.ca { background:#6ee7b7; }
+    #qp-token-speed-detail .qp-tp-fill.out { background:var(--qp-gold); }
+    #qp-token-speed-detail .qp-tp-v { text-align:right; color:#e0eafd; font-size:11px; }
+    #qp-token-speed-detail .qp-tp-note { color:#91a4c0; font-size:10px; line-height:1.6; padding-top:4px; }
+    /* 今日账本 */
+    #qp-token-speed-detail .qp-lg { padding:2px 0 14px; }
+    #qp-token-speed-detail .qp-lg-sum { display:flex; flex-wrap:wrap; gap:6px 14px; color:#c3d0e4; font-size:12px; }
+    #qp-token-speed-detail .qp-lg-cr { color:var(--qp-gold); font-weight:600; }
+    #qp-token-speed-detail .qp-lg-cny { color:#a8ecd9; font-weight:600; }
+    #qp-token-speed-detail .qp-lg-plan { color:var(--qp-blue); font-weight:600; }
+    #qp-token-speed-detail .qp-lg-amort { color:#98a9c1; }
+    #qp-token-speed-detail .qp-lg-models { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+    #qp-token-speed-detail .qp-lg-m { padding:2px 8px; border:1px solid var(--qp-line); border-radius:7px; color:#9fb0c8; font-size:11px; background:#ffffff05; }
+    #qp-token-speed-detail .qp-tp-select { margin-left:auto; padding:2px 6px; border-radius:6px; border:1px solid #ffd47930; background:#1a2230; color:var(--qp-gold); font-size:11px; cursor:pointer; }
+    /* 说明 / 图表 / 分段表 */
+    #qp-token-speed-detail .qp-d-explain { color:#91a4c0; font-size:11px; line-height:1.7; border-top:1px solid #ffffff12; padding-top:12px; margin-bottom:18px; }
+    #qp-token-speed-detail .qp-d-note { font-size:11px; color:var(--qp-warn); background:#e9a55e0b; border:1px solid #dba66d2a; border-radius:9px; padding:8px 11px; margin-bottom:12px; line-height:1.6; }
     #qp-token-speed-detail .qp-d-chart { margin-bottom:8px; background:#0d172440; border-radius:12px; }
     #qp-token-speed-detail .qp-d-chart svg { display:block; width:100%; height:auto; }
     #qp-token-speed-detail .qp-d-empty { padding:12px 16px; text-align:left; color:#92a6c3; font-size:11px; line-height:1.7; }
@@ -2100,16 +2531,16 @@
     #qp-token-speed-detail .qp-rd { color:#a5b7d0; }
     #qp-token-speed-detail .qp-rs { color:#a0d8d2; text-align:right; }
     #qp-token-speed-detail .qp-d-segtitle span:last-child { text-align:right; }
-    @media(max-width:600px) {
-      #qp-token-speed-bar { gap:10px; padding:8px 10px; border-radius:12px; }
-      #qp-token-speed-bar .qp-ts-extra { display:none; }
+    @media(max-width:640px) {
+      #qp-token-speed-bar { gap:10px; padding:7px 9px; border-radius:12px; }
+      #qp-token-speed-bar .qp-ts-extra, #qp-token-speed-bar .qp-ts-model { display:none; }
       #qp-token-speed-bar .qp-ts-speed .qp-ts-val { font-size:16px; }
       #qp-token-speed-bar .qp-ts-state { font-size:10px; }
       #qp-token-speed-detail { max-width:calc(100vw - 20px); max-height:calc(100dvh - 24px); padding:18px; border-radius:19px; }
       #qp-token-speed-detail .qp-d-heading { font-size:19px; }
       #qp-token-speed-detail .qp-d-title { margin-bottom:16px; gap:8px; }
       #qp-token-speed-detail .qp-d-tools { gap:6px; }
-      #qp-token-speed-detail .qp-d-hero { gap:8px; }
+      #qp-token-speed-detail .qp-d-hero { grid-template-columns:1fr; gap:8px; }
       #qp-token-speed-detail .qp-d-card { padding:14px 12px; }
       #qp-token-speed-detail .qp-d-number { font-size:29px; gap:4px; }
       #qp-token-speed-detail .qp-d-number small { font-size:10px; }
@@ -2118,7 +2549,7 @@
       #qp-token-speed-detail .qp-d-time:nth-child(3) { border-left:0; }
       #qp-token-speed-detail .qp-d-usage { grid-template-columns:1fr; }
     }
-    @media(prefers-reduced-motion:reduce) { #qp-token-speed-bar.running .qp-ts-dot { animation:none; } }
+    @media(prefers-reduced-motion:reduce) { #qp-token-speed-bar.running .qp-ts-dot { animation:none; } #qp-token-speed-bar.running::after { animation:none; } }
     /* 代码块整体透明磨砂化，与聊天气泡风格统一（dream-skin 兼容） */
     html.qwenpaw-dream-skin {
       --qds-code-bg: transparent !important;
@@ -2166,7 +2597,8 @@
   }
 
   // ════════════════════════════════════════════════════════════
-  // 13-ui-bar.js · 悬浮条渲染（等待/生成中/回放/结果四态）
+  // 13-ui-bar.js · 悬浮条渲染（等待/生成中/回放/结果四态）+ 渠道文案
+  // v1.20.0 仪表化重设计：状态·模型·速度·输出·费用 chip·详情，一眼读完本轮经济账
   // ════════════════════════════════════════════════════════════
   // ---------- 渲染（bar：实时态/完成态/空态） ----------
 
@@ -2180,18 +2612,23 @@
   }
 
   // v1.8.0：渠道文案（面板 chip + hover 说明），正文一律说人话；v1.19.0：代号 plan（旧值 afp 兼容显示）
+  // v1.20.0：新增百炼 Token Plan / 百炼按量
   function channelLabel(ch) {
     if (ch === "plan" || ch === "afp") return "套餐渠道";
     if (ch === "coding") return "Coding Plan";
     if (ch === "deepseek") return "DeepSeek 官方";
+    if (ch === "tokenplan") return "百炼 Token Plan";
+    if (ch === "dashscope") return "百炼按量";
     if (ch === "other") return "其他渠道";
     return "未识别";
   }
   function channelTip(ch, provider) {
     var head = "计费渠道：" + channelLabel(ch) + (provider ? "（" + provider + "）" : "") + "。";
     if (ch === "plan" || ch === "afp") return head + "走套餐（Agent Plan）渠道，按套餐额度抵扣——同一个模型名在按量渠道是人民币计费，两边计费方式互斥，所以只能按渠道判";
-    if (ch === "coding") return head + "走 Coding Plan 渠道（地址 /api/coding/v3），按请求次数计、不是 token/额度，个人版无公开用量 API → 本插件只报 token，不报金额";
+    if (ch === "coding") return head + "走 Coding Plan 渠道（地址 /api/coding/v3 或 coding.dashscope.aliyuncs.com），按请求次数计、不是 token/额度，个人版无公开用量 API → 本插件只报 token，不报金额";
     if (ch === "deepseek") return head + "走 DeepSeek 官方 API，按人民币计价（尖峰/低谷单价不同）";
+    if (ch === "tokenplan") return head + "走阿里云百炼 Token Plan，按 Credits 抵扣：credits/万tok 的数值 = 官方刊例价 元/百万tok（1 credit = 0.01 元刊例价）。北京时间 22:00–08:00 部分模型享官方夜间折扣（qwen3.8 系 4 折 / deepseek-v4 系 5 折），qwen4-max-preview 预览期另有 2 折；plus/flash 系按输入 token 阶梯计价";
+    if (ch === "dashscope") return head + "走阿里云百炼按量付费，人民币刊例价计价（DeepSeek 系模型分忙/闲时，忙 08:00–22:00 北京）；与 Token Plan 的 Credits 额度相互独立、不互通";
     if (ch === "other") return head + "不是套餐/DeepSeek 官方这类内置价目渠道，本插件没有该渠道价表 → 只报 token，不报金额（可在覆盖层配 generic 价目）";
     return head + "拿不到 provider 信息（usage.provider_id 为空、/api/models/active 也读不到）→ 只报 token，不报金额。宁可空着，也不按模型名猜一个错数";
   }
@@ -2223,21 +2660,54 @@
   function barState(text, tip) {
     return '<span class="qp-ts-state" title="' + escHtml(tip || '') + '"><span class="qp-ts-dot"></span>' + text + '</span>';
   }
+  // v1.20.0 费用 chip：credits 金色 ◈ / 人民币 ¥ / 套餐 ▣。算不出钱就不显示（宁可空着不猜）。
+  // 符号 + 数值即可，单位与口径放 hover——条上空间留给速度。
+  function costChipHtml(r) {
+    if (!r) return "";
+    if (r.cost != null && r.costUnit === "credits") {
+      return '<span class="qp-ts-item qp-ts-cost credits" title="本轮 Credits 消耗（百炼 Token Plan）≈' + escHtml(fmtMoney(creditsToCny(r.cost), "¥")) + ' 刊例价"><span class="qp-ts-val">◈ ' + fmtCredits(r.cost) + '</span></span>';
+    }
+    if (r.cost != null && r.costUnit === "plan") {
+      return '<span class="qp-ts-item qp-ts-cost plan" title="套餐抵扣 ' + escHtml(fmtMoney(r.cost, "")) + ' 额度"><span class="qp-ts-val">▣ ' + fmtMoney(r.cost, "") + '</span></span>';
+    }
+    if (r.cost != null) {
+      return '<span class="qp-ts-item qp-ts-cost cny" title="本轮费用（人民币）"><span class="qp-ts-val">' + fmtMoney(r.cost, "¥") + '</span></span>';
+    }
+    if (r.afp != null && r.afp > 0) {
+      return '<span class="qp-ts-item qp-ts-cost plan" title="套餐抵扣 ' + escHtml(fmtPlan(r.afp)) + ' 额度"><span class="qp-ts-val">▣ ' + fmtPlan(r.afp) + '</span></span>';
+    }
+    if (r.coefRange && r.afpLo != null) {
+      return '<span class="qp-ts-item qp-ts-cost plan" title="Auto 路由活动期外：套餐抵扣参考区间"><span class="qp-ts-val">▣ ' + fmtPlanRange({ lo: r.afpLo, hi: r.afpHi }) + '</span></span>';
+    }
+    if (r.tpRange && r.tpLo != null) {
+      return '<span class="qp-ts-item qp-ts-cost credits" title="auto 路由：全表当前时刻 Credits 参考区间"><span class="qp-ts-val">◈ ' + fmtCredits(r.tpLo) + '~' + fmtCredits(r.tpHi) + '</span></span>';
+    }
+    return "";
+  }
+  // v1.20.0 模型名短标（截断由 CSS 负责，hover 看全名）
+  function barModelHtml(model) {
+    if (!model) return "";
+    return '<span class="qp-ts-model" title="' + escHtml(model) + '">' + escHtml(model) + '</span>';
+  }
   function buildRunningHtml(x) {
     if (x.replaying) return barState("回放中", ATTACH_TIP) + barItem("已恢复", fmtNum(x.replayTokens || 0) + " tok") + '<span class="qp-ts-more">详情 ↗</span>';
     return barState(x.attached ? "已接入" : "生成中", x.attached ? ATTACH_TIP + "；回放 " + fmtNum(x.replayTokens || 0) + " tok" : "实时估算，结束后由后端用量校准") +
+      barModelHtml(x.model) +
       barItem("速度", fmtSpeed(x.speed) + '<small class="qp-ts-unit">tok/s</small>', "qp-ts-speed") +
       barItem("输出", (x.tokenSource === "estimate" ? "≈" : "") + fmtNum(x.tokens) + '<small class="qp-ts-unit">tok</small>') +
       (x.pauseSec > .5 ? barItem("等待", fmtSec(x.pauseSec), "qp-ts-extra") : !x.attached ? barItem("首字", fmtMs(x.ttft), "qp-ts-extra") : '') +
+      costChipHtml(x) +
       '<span class="qp-ts-more">详情 ↗</span>';
   }
   function buildResultHtml(r) {
     var info = statusInfo(r, false);
     var total = r.outputTokens != null ? r.outputTokens : r.attached && r.totalGenerated ? r.totalGenerated : (r.tokens || 0) + (r.toolTokens || 0);
     var html = barState(r.attached ? "已接入" : info.text, info.tip + (r.attached ? "；" + ATTACH_TIP + "；回放 " + fmtNum(r.replayTokens || 0) + " tok" : ""));
+    html += barModelHtml(r.model);
     if (r.genSpeed > 0 && !r.historyOnly) html += barItem("生成", fmtSpeed(r.genSpeed) + '<small class="qp-ts-unit">tok/s</small>', "qp-ts-speed");
     html += barItem("输出", (r.tokenSource === "estimate" ? "≈" : "") + fmtNum(total) + '<small class="qp-ts-unit">tok</small>', '', "本轮输出总量，含正文、思考和工具参数");
     if (r.secondsKnown !== false && r.seconds != null) html += barItem(r.originKnown === false ? "观察" : "耗时", fmtSec(r.seconds), "qp-ts-extra");
+    html += costChipHtml(r);
     return html + '<span class="qp-ts-more">详情 ↗</span>';
   }
 
@@ -2278,7 +2748,8 @@
   }
 
   // ════════════════════════════════════════════════════════════
-  // 14-ui-panel.js · 详情面板（大折线图 / 分段增量表 / 600ms 实时刷新）
+  // 14-ui-panel.js · 详情面板（三卡 hero / sparkline / Credits 分解 / 今日账本 / 分段增量表）
+  // v1.20.0 仪表甲板重设计：head 每拍重绘（数字实时跳），分段表增量追加（滚动不丢）
   // ════════════════════════════════════════════════════════════
   // ---------- 详情面板（独立界面：大折线图 + 分段明细 + 完整汇总） ----------
 
@@ -2316,15 +2787,15 @@
     [0, 0.5, 1].forEach(function (f) {
       var gy = y(max * f).toFixed(1);
       var label = (max * f).toFixed(max >= 100 ? 0 : 1);
-      grid += '<line x1="' + PL + '" y1="' + gy + '" x2="' + (W - PR) + '" y2="' + gy + '" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>' +
-        '<text x="' + (PL - 6) + '" y="' + gy + '" fill="#8fa4c2" font-size="10" text-anchor="end" dominant-baseline="middle">' + label + "</text>";
+      grid += '<line x1="' + PL + '" y1="' + gy + '" x2="' + (W - PR) + '" y2="' + gy + '" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>' +
+        '<text x="' + (PL - 6) + '" y="' + gy + '" fill="#7d8ca3" font-size="10" text-anchor="end" dominant-baseline="middle">' + label + "</text>";
     });
     // X 轴段号（首、尾，段多时加中点）
-    var axis = '<text x="' + x(0) + '" y="' + (H - 8) + '" fill="#8fa4c2" font-size="10" text-anchor="middle">' + sourceIndices[0] + '</text>' +
-      '<text x="' + x(n - 1) + '" y="' + (H - 8) + '" fill="#8fa4c2" font-size="10" text-anchor="middle">' + sourceIndices[n - 1] + "</text>";
+    var axis = '<text x="' + x(0) + '" y="' + (H - 8) + '" fill="#7d8ca3" font-size="10" text-anchor="middle">' + sourceIndices[0] + '</text>' +
+      '<text x="' + x(n - 1) + '" y="' + (H - 8) + '" fill="#7d8ca3" font-size="10" text-anchor="middle">' + sourceIndices[n - 1] + "</text>";
     if (n >= 6) {
       var mid = Math.floor((n - 1) / 2);
-      axis += '<text x="' + x(mid) + '" y="' + (H - 8) + '" fill="#8fa4c2" font-size="10" text-anchor="middle">' + sourceIndices[mid] + "</text>";
+      axis += '<text x="' + x(mid) + '" y="' + (H - 8) + '" fill="#7d8ca3" font-size="10" text-anchor="middle">' + sourceIndices[mid] + "</text>";
     }
     // 折线 + 每段数据点（悬浮 title 提示该段明细）
     var dots = pts.map(function (p, i) {
@@ -2332,13 +2803,118 @@
       var tip = "段" + sourceIndices[i] + "：总量 " + Math.round(s.tokens) + " tok；测速增量 " + Math.round(measuredSegTokens(s))
         + " tok / " + ((s.t1 - s.t0) / 1000).toFixed(1) + "s = " + speeds[i].toFixed(1) + " tok/s（排除首包和缓冲冲刷）";
       return '<circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="' + (i === n - 1 ? 3.5 : 2.5) +
-        '" fill="' + (i === n - 1 ? "#98edda" : "rgba(130,180,255,0.85)") + '"><title>' + tip + "</title></circle>";
+        '" fill="' + (i === n - 1 ? "#ffd479" : "rgba(127,231,196,0.85)") + '"><title>' + tip + "</title></circle>";
     }).join("");
     return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="各有效分段生成速度趋势，单位 tok/s">' + grid +
-      '<path d="' + path + '" stroke="rgba(130,180,255,0.7)" stroke-width="1.5" fill="none"/>' + dots + axis + "</svg>";
+      '<path d="' + path + '" stroke="rgba(143,184,255,0.75)" stroke-width="1.5" fill="none"/>' + dots + axis + "</svg>";
   }
 
-  // 详情面板头部 HTML（title/说明/chips/折线图/分段标题；传入 result 或"活 state 快照"）
+  // v1.20.0 实时速度 sparkline（生成中 hero 速度卡内；≥2 个采样点才画，不捏造趋势）
+  function buildSparkline(hist) {
+    if (!hist || hist.length < 2) return "";
+    var W = 220, H = 40, max = 1, i;
+    for (i = 0; i < hist.length; i++) if (hist[i][1] > max) max = hist[i][1];
+    var t0 = hist[0][0], span = Math.max(1, hist[hist.length - 1][0] - t0);
+    var pts = hist.map(function (p) { return [(p[0] - t0) / span * W, H - 4 - (p[1] / max) * (H - 10)]; });
+    var d = pts.map(function (p, j) { return (j ? "L" : "M") + p[0].toFixed(1) + "," + p[1].toFixed(1); }).join(" ");
+    return '<svg class="qp-spark" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true">' +
+      '<path d="' + d + ' L' + W + ',' + H + ' L0,' + H + ' Z" fill="rgba(127,231,196,0.10)"/>' +
+      '<path d="' + d + '" fill="none" stroke="#7fe7c4" stroke-width="1.5"/></svg>';
+  }
+
+  // v1.20.0 计费 hero 卡：credits 金 / 人民币青 / 套餐蓝；算不出钱给"—"与原因（不猜）
+  function billingCardHtml(r) {
+    var label, num, cap, cls = "";
+    if (r.cost != null && r.costUnit === "credits") {
+      cls = " credits";
+      label = 'Credits 消耗<span class="qp-d-tag">Token Plan</span>';
+      num = fmtCredits(r.cost) + '<small>credits</small>';
+      cap = '≈' + fmtMoney(creditsToCny(r.cost), '¥') + ' 刊例价';
+      var tierId = tpTierPref(), plan = null;
+      for (var i = 0; i < TP_PLANS.length; i++) if (TP_PLANS[i].id === tierId) plan = TP_PLANS[i];
+      if (plan) cap += ' · 按 ' + plan.name + ' 摊销 ≈' + fmtMoney(r.cost * plan.price / plan.quota, '¥');
+      if (r.tp && r.tp.factor < 1) cap = '<span class="qp-d-disc">' + escHtml(r.tp.factorNote || '折扣生效') + '</span>' + cap;
+    } else if (r.cost != null && r.costUnit === "plan") {
+      label = '套餐抵扣';
+      num = fmtMoney(r.cost, "") + '<small>额度</small>';
+      cap = escHtml(channelLabel(r.channel));
+    } else if (r.cost != null) {
+      label = '本轮费用';
+      num = fmtMoney(r.cost, '¥');
+      cap = escHtml(channelLabel(r.channel));
+      if (r.channel === "deepseek") {
+        var t = priceTableFor(r.model);
+        if (t) cap += ' · ' + (isPeakHour(t) ? '尖峰时段' : '低谷时段');
+      }
+    } else if (r.afp != null && r.afp > 0) {
+      label = '套餐抵扣';
+      num = fmtPlan(r.afp) + '<small>额度</small>';
+      cap = '系数计费 · ' + escHtml(channelLabel(r.channel));
+    } else if (r.coefRange && r.afpLo != null) {
+      label = '套餐抵扣 · 参考';
+      num = fmtPlanRange({ lo: r.afpLo, hi: r.afpHi }) + '<small>额度</small>';
+      cap = 'Auto 路由 · 活动期外参考区间';
+    } else if (r.tpRange && r.tpLo != null) {
+      cls = " credits";
+      label = 'Credits · 参考';
+      num = fmtCredits(r.tpLo) + '~' + fmtCredits(r.tpHi) + '<small>credits</small>';
+      cap = 'auto 路由 · 全表当前时刻区间';
+    } else {
+      label = '计费';
+      num = '—';
+      cap = r.coefMissing ? '系数未知' : r.priceMissing ? '无价表' : '渠道未识别';
+    }
+    return '<div class="qp-d-card bill' + cls + '"><div class="qp-d-label">' + label + '</div><div class="qp-d-number">' + num + '</div><div class="qp-d-caption">' + cap + '</div></div>';
+  }
+
+  // v1.20.0 Credits 三分量分解条（输入/缓存/输出），阶梯/估算/折扣口径全部标注
+  function tpBreakdownHtml(r) {
+    if (!r.tp) return "";
+    var t = r.tp, sum = Math.max(t.input + t.cache + t.output, 1e-9);
+    function bar(label, v, cls) {
+      var pct = Math.max(2, Math.round(v / sum * 100));
+      return '<div class="qp-tp-row"><span class="qp-tp-l">' + label + '</span><span class="qp-tp-track"><span class="qp-tp-fill ' + cls + '" style="width:' + pct + '%"></span></span><span class="qp-tp-v">' + fmtCredits(v) + '</span></div>';
+    }
+    var notes = [];
+    if (t.tierIdx > 0) notes.push('输入超阶梯阈值，按第 ' + (t.tierIdx + 1) + ' 档计价');
+    if (t.cacheAssumed) notes.push('缓存命中单价未公布，按输入价估算');
+    if (t.assumedBase) notes.push('预览版无独立刊例价，按 qwen4-max 刊例价估算');
+    return '<div class="qp-d-section">Credits 构成<small>输入 / 缓存 / 输出 · 三分量</small></div><div class="qp-tp">' +
+      bar('输入', t.input, 'in') + bar('缓存', t.cache, 'ca') + bar('输出', t.output, 'out') +
+      (notes.length ? '<div class="qp-tp-note">' + escHtml(notes.join('；')) + '</div>' : '') + '</div>';
+  }
+
+  // v1.20.0 今日账本（本地滚动流水聚合；credits>0 时提供套餐档位摊销选择）
+  function tpTierPref() { try { return localStorage.getItem("qp_token_speed_tp_tier") || ""; } catch (e) { return ""; } }
+  function ledgerHtml() {
+    var s = ledgerToday();
+    if (!s.turns) return "";
+    var parts = ['<span>' + s.turns + ' 回合</span>', '<span>输出 ' + fmtNum(s.out) + ' tok</span>'];
+    if (s.credits > 0) parts.push('<span class="qp-lg-cr">◈ ' + fmtCredits(s.credits) + ' credits</span>');
+    if (s.cny > 0) parts.push('<span class="qp-lg-cny">' + fmtMoney(s.cny, '¥') + '</span>');
+    if (s.plan > 0) parts.push('<span class="qp-lg-plan">▣ ' + fmtPlan(s.plan) + ' 额度</span>');
+    var tierSel = "";
+    if (s.credits > 0) {
+      var cur = tpTierPref(), plan = null, i;
+      for (i = 0; i < TP_PLANS.length; i++) if (TP_PLANS[i].id === cur) plan = TP_PLANS[i];
+      var opts = '<option value="">不摊销</option>';
+      for (i = 0; i < TP_PLANS.length; i++) {
+        var p = TP_PLANS[i];
+        opts += '<option value="' + p.id + '"' + (cur === p.id ? ' selected' : '') + '>' + p.name + ' ¥' + p.price + '/月</option>';
+      }
+      tierSel = '<select id="qp-tp-tier" class="qp-tp-select" title="选择你的 Token Plan 档位，按订阅实际成本摊销今日 credits">' + opts + '</select>';
+      if (plan) parts.push('<span class="qp-lg-amort">按 ' + plan.name + ' 摊销 ≈' + fmtMoney(s.credits * plan.price / plan.quota, '¥') + '</span>');
+    }
+    var models = Object.keys(s.byModel).sort(function (a, b) { return (s.byModel[b].out || 0) - (s.byModel[a].out || 0); }).slice(0, 3);
+    var mhtml = models.map(function (m) {
+      var b = s.byModel[m];
+      return '<span class="qp-lg-m" title="' + b.turns + ' 回合 · 输出 ' + Math.round(b.out) + ' tok">' + escHtml(m) + ' · ' + fmtNum(b.out) + '</span>';
+    }).join("");
+    return '<div class="qp-d-section">今日消耗<small>本地账本 · 仅本机统计</small>' + tierSel + '</div><div class="qp-lg"><div class="qp-lg-sum">' + parts.join('') + '</div>' +
+      (mhtml ? '<div class="qp-lg-models">' + mhtml + '</div>' : '') + '</div>';
+  }
+
+  // 详情面板头部 HTML（title/说明/hero 三卡/时间带/用量/Credits 分解/账本/折线图/分段标题）
   // v1.9.0：拆成 head（每拍重绘，数字实时跳）与分段表（增量追加，见 syncSegs）
   function buildDetailHead(r) {
     var segs = r.segments || [], running = r.status === "running", info = statusInfo(r, running);
@@ -2362,17 +2938,27 @@
     if (r.afp != null && r.afp > 0) usage += row("套餐抵扣", fmtPlan(r.afp) + " 额度", channelTip(r.channel, r.provider)) + row("其中缓存重计", rebillNote(r.channel, r.cacheHit, r.model).replace(/[（）]/g, '').replace('缓存重计 ', '') || "—");
     if (r.cost != null) usage += r.costUnit === "plan"
       ? row("套餐抵扣", fmtMoney(r.cost, "") + " 额度", channelTip(r.channel, r.provider))
-      : row("费用", fmtMoney(r.cost, "¥"), channelTip(r.channel, r.provider));
+      : r.costUnit === "credits"
+        ? row("Credits 消耗", fmtCredits(r.cost) + " credits", channelTip(r.channel, r.provider))
+        : row("费用", fmtMoney(r.cost, "¥"), channelTip(r.channel, r.provider));
     if (r.coefRange && r.afpLo != null) usage += row("套餐抵扣 · 参考", fmtPlanRange({lo:r.afpLo,hi:r.afpHi}), ALIAS_TIP);
+    if (r.tpRange && r.tpLo != null) usage += row("Credits · 参考", fmtCredits(r.tpLo) + "~" + fmtCredits(r.tpHi) + " credits", "auto 智能路由底层模型不定，按全表当前时刻给参考区间");
     if (r.coefMissing || r.priceMissing || !r.channel) usage += row("计费", r.coefMissing ? "系数未知" : r.priceMissing ? "无价表" : "渠道未识别", channelTip(r.channel,r.provider));
     var observed = !r.historyOnly && speed > 0;
     var speedNote = r.historyOnly ? "历史仅恢复用量，未观测生成速度" : r.attached ? "仅统计接入后有效生成，回放不计速" : "排除首字、工具等待及缓冲冲刷";
+    // v1.20.0 燃烧率 caption：当前速度下每分钟烧多少（只算输出侧）
+    var burnHtml = "";
+    if (running && r.burnRate && r.burnRate.value > 0) {
+      burnHtml = '<div class="qp-d-burn">燃烧率 ≈' + (r.burnRate.unit === "credits/min" ? fmtCredits(r.burnRate.value) + ' credits/min' : fmtMoney(r.burnRate.value, '¥') + '/h') + '</div>';
+    }
+    var sparkHtml = running ? buildSparkline(r.speedHist) : "";
     var html = '<div class="qp-d-title"><div><div class="qp-d-eyebrow">TOKEN SPEED</div><div class="qp-d-heading" id="qp-d-heading">本轮生成概览</div><div class="qp-d-meta">' + escHtml(r.model || "未知模型") + (r.aliasModel ? " · Auto" : "") + ' · ' + channelLabel(r.channel) + (fmtAge(r) ? ' · ' + fmtAge(r) : '') + '</div></div><div class="qp-d-tools"><span class="qp-d-badge ' + escHtml(r.status) + '" title="' + escHtml(info.tip) + '">' + info.text + '</span><button type="button" class="qp-d-close" id="qp-d-close" aria-label="关闭生成详情">×</button></div></div>' + note +
-      '<div class="qp-d-hero"><div class="qp-d-card speed"><div class="qp-d-label">' + (running ? '实时生成速度' : '有效生成速度') + '<span class="qp-d-tag">' + (r.historyOnly ? '未观测' : '观测估算') + '</span></div><div class="qp-d-number">' + (observed ? fmtSpeed(speed) : '—') + '<small>tok/s</small></div><div class="qp-d-caption">' + speedNote + '</div></div><div class="qp-d-card"><div class="qp-d-label">本轮输出<span class="qp-d-tag">' + (estimated ? '估算' : '后端用量') + '</span></div><div class="qp-d-number" title="' + Math.round(total).toLocaleString('zh-CN') + ' tok">' + (estimated ? '≈' : '') + fmtNum(total) + '<small>tok</small></div><div class="qp-d-caption">含正文、思考与工具参数</div></div></div>' +
+      '<div class="qp-d-hero"><div class="qp-d-card speed"><div class="qp-d-label">' + (running ? '实时生成速度' : '有效生成速度') + '<span class="qp-d-tag">' + (r.historyOnly ? '未观测' : '观测估算') + '</span></div><div class="qp-d-number">' + (observed ? fmtSpeed(speed) : '—') + '<small>tok/s</small></div>' + sparkHtml + '<div class="qp-d-caption">' + speedNote + '</div>' + burnHtml + '</div><div class="qp-d-card"><div class="qp-d-label">本轮输出<span class="qp-d-tag">' + (estimated ? '估算' : '后端用量') + '</span></div><div class="qp-d-number" title="' + Math.round(total).toLocaleString('zh-CN') + ' tok">' + (estimated ? '≈' : '') + fmtNum(total) + '<small>tok</small></div><div class="qp-d-caption">含正文、思考与工具参数</div></div>' + billingCardHtml(r) + '</div>' +
       '<div class="qp-d-timings">' + time("首字等待", r.attached || r.historyOnly ? '—' : fmtMs(r.ttft), "从提交请求到首个输出到达") +
       time("工具 / 空闲等待", waitValue(r.pauseSec), "已观测工具执行与段间空闲等待") + time("工具后模型等待", waitValue(r.modelWaitSec), "工具结束到下一次正文或思考到达，单列记录") +
       time(r.originKnown === false ? "接入后观察" : "总耗时", r.secondsKnown === false || r.seconds == null ? '—' : fmtSec(r.seconds), "从请求开始到结束；中途接入时为已观测时长") + '</div>' +
       '<div class="qp-d-section">用量与计费<small>拆分项已包含在总量内</small></div><div class="qp-d-usage">' + usage + '</div>' +
+      tpBreakdownHtml(r) + ledgerHtml() +
       '<div class="qp-d-explain">' + (estimated ? '≈ 表示估算。输出总量在后端用量到达后校准；速度与输出拆分仍为观测估算。' : '输出总量取后端用量；带 ≈ 的速度与拆分项为观测估算。') + '</div>';
     if (!r.historyOnly) html += '<div class="qp-d-section">生成分段<small title="' + escHtml(AVG_TIP) + '">' + segs.length + ' 段' + (r.peak > 0 ? ' · 峰值 ' + fmtSpeed(r.peak) + ' tok/s' : '') + (r.avg > 0 ? ' · 全程均速 ' + fmtSpeed(r.avg) + ' tok/s' : '') + '</small></div><div class="qp-d-chart">' + buildDetailChart(segs) + '</div>';
     if (segs.length) html += '<div class="qp-d-segtitle"><span>分段</span><span>输出量 ≈</span><span>有效时长</span><span>生成速度 ≈</span></div>';
@@ -2474,6 +3060,13 @@
       afpLo: _money.afpLo,
       afpHi: _money.afpHi,
       coefRange: _money.coefRange,
+      // v1.20.0：TokenPlan 明细 / auto 区间 / 燃烧率 / sparkline 采样
+      tp: _money.tp,
+      tpLo: _money.tpLo,
+      tpHi: _money.tpHi,
+      tpRange: _money.tpRange,
+      burnRate: burnRateOf(_ch, st.model, st.lastSpeed || 0, st.promptTokens),
+      speedHist: st.speedHist ? st.speedHist.slice() : [],
       // v1.14.1：不变量——峰值不可能低于平均（与 endTurn 同款兜底；此处 avg/peak 同为
       // wall-clock 口径，兜底无口径差）
       peak: Math.max(st.peakMax || 0, _liveEl > 0.1 ? st.tokenCount / _liveEl : 0),
@@ -2492,6 +3085,16 @@
       });
     }
   }
+  // v1.20.0：套餐档位选择（今日账本摊销）——换档就地强制重绘（签名不变也要刷）
+  function bindTierSelect() {
+    var sel = document.getElementById("qp-tp-tier");
+    if (!sel || !sel.addEventListener) return;
+    sel.addEventListener("change", function () {
+      try { localStorage.setItem("qp_token_speed_tp_tier", sel.value || ""); } catch (e) { /* ignore */ }
+      var sid = getSessionId(), st = getActiveStream(sid);
+      refreshDetail(st && st.tFirst ? liveSnapshot(st) : loadLastResult(sid));
+    });
+  }
   // v1.9.0：paintDetail 拆"头 + 分段表"两步——head 每拍重绘（数字实时跳），
   // 分段表增量追加（已有行不重建，滚动位置不丢）
   function paintDetail(p, snap, live) {
@@ -2505,6 +3108,7 @@
     var headEl = p.querySelector(".qp-d-head");
     if (headEl) headEl.innerHTML = buildDetailHead(snap);
     bindDetailClose(p);   // head 换 innerHTML 后关闭按钮是新节点，得重新绑
+    bindTierSelect();     // v1.20.0 档位选择同理
     var box = p.querySelector(".qp-d-segs");
     if (box) syncSegs(box, snap.segments || [], !!live);
     p.scrollTop = top;
@@ -2552,7 +3156,8 @@
     paintDetail(p, r, !!(r && r.status === "running")); // v1.9.0：统一走增量渲染
     detailSig = detailSignature(getSessionId());
     setTimeout(function () {
-      document.addEventListener("click", onDocClickDetail, true);
+      // v1.20.0 稳定性：面板若已在同一拍内被关掉，不再挂 document 监听（旧版会留下孤儿监听器）
+      if (document.getElementById(PANEL_ID)) document.addEventListener("click", onDocClickDetail, true);
     }, 0);
     document.addEventListener("keydown", onDetailKeydown, true); // v1.13.0：ESC 关闭
     detailTimer = setInterval(function () {
@@ -2628,7 +3233,13 @@
     return false;
   }
 
-  function hideAnchor() {
+  // v1.20.0 稳定性/性能：标语隐藏短路。旧版每 3s 全量 TreeWalker 扫 body 所有文本节点，
+  // 长会话里是纯浪费。标语是落地页静态节点——隐藏成功一次后就不再扫（会话切换重置；
+  // 主循环每 30s 强制复扫一次兜底 React 重挂载）。首次没扫到不置位，继续 3s 一扫直到命中。
+  var anchorHidden = false;
+  function resetAnchorScan() { anchorHidden = false; }
+  function hideAnchor(force) {
+    if (anchorHidden && !force) return;
     try {
       var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
         acceptNode: function (n) {
@@ -2637,7 +3248,7 @@
             ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
         }
       });
-      var n;
+      var n, hid = false;
       while ((n = walker.nextNode())) {
         var el = n.parentElement;
         if (el && !el._qpHidden && !insideChatOrPlugin(el)) {
@@ -2645,9 +3256,11 @@
           if (flat.length < 30) {
             el.style.display = "none";
             el._qpHidden = true;
+            hid = true;
           }
         }
       }
+      if (hid) anchorHidden = true;
     } catch (e) { /* ignore */ }
   }
 
@@ -2704,6 +3317,7 @@
       if (sid === visibleSid) return;
       visibleSid = sid;
       closeDetail();
+      resetAnchorScan(); // v1.20.0：新会话的落地页标语要重新扫
       refreshBarContent();
     }
     ["pushState", "replaceState"].forEach(function (name) {
@@ -2735,50 +3349,58 @@
   // 16-init.js · 初始化与 1s 主循环（停顿补测 / error 帧延迟判定）
   // ════════════════════════════════════════════════════════════
   // ---------- 初始化 ----------
+  // v1.20.0 稳定性：子系统各自隔离——样式/挂载/路由/渠道任何一个失败都不拖垮统计主循环
   function init() {
-    injectStyles();
-    injectBar();
-    installRouteTracking();
-    refreshActiveLlm(false); // v1.8.0：尽早拿真实渠道/模型（并修正旧版结果里错的金额）
+    try { injectStyles(); } catch (e) { /* ignore */ }
+    try { injectBar(); } catch (e) { /* ignore */ }
+    try { installRouteTracking(); } catch (e) { /* ignore */ }
+    try { refreshActiveLlm(false); } catch (e) { /* ignore */ } // v1.8.0：尽早拿真实渠道/模型（并修正旧版结果里错的金额）
+    // v1.20.0：窗口尺寸变化立即重定位（旧版只靠 1s 轮询，拖拽窗口时悬浮条会漂一秒）
+    try { window.addEventListener("resize", function () { try { positionBar(); } catch (e) { /* ignore */ } }); } catch (e) { /* ignore */ }
 
     var lastSession = getSessionId();
     var slowTick = 0;
     setInterval(function () {
-      slowTick++;
-      var curSession = getSessionId();
+      try {
+        slowTick++;
+        var curSession = getSessionId();
 
-      // 1) 活跃流维护：停顿补测（流尾部工具等待漏计兜底）+ 挂起的 error 帧延迟判定
-      Object.keys(states).forEach(function (sid) {
-        var st = states[sid];
-        if (!st || !st.active) return;
-        // 1a) v1.8.0：见过 error 帧后 1.6s 内没有新事件 → 判定流真的死了（有输出按"已中断"）
-        if (st.pendingError && st.lastEventAt && (now() - st.lastEventAt) > 1600) {
-          finishAbnormal(st, st.pendingError, "error_frame");
+        // 1) 活跃流维护：停顿补测（流尾部工具等待漏计兜底）+ 挂起的 error 帧延迟判定
+        Object.keys(states).forEach(function (sid) {
+          var st = states[sid];
+          if (!st || !st.active) return;
+          // 1a) v1.8.0：见过 error 帧后 1.6s 内没有新事件 → 判定流真的死了（有输出按"已中断"）
+          if (st.pendingError && st.lastEventAt && (now() - st.lastEventAt) > 1600) {
+            finishAbnormal(st, st.pendingError, "error_frame");
+            return;
+          }
+          maintainStream(st, now());
+        });
+
+        // 2) 会话切换：fixed bar 不销毁重建（无闪动），只刷新内容
+        if (curSession !== lastSession) {
+          lastSession = curSession;
+          resetAnchorScan(); // v1.20.0
+          refreshBarContent();
           return;
         }
-        maintainStream(st, now());
-      });
 
-      // 2) 会话切换：fixed bar 不销毁重建（无闪动），只刷新内容
-      if (curSession !== lastSession) {
-        lastSession = curSession;
-        refreshBarContent();
-        return;
-      }
+        // 3) 位置校正 + 存活维护
+        positionBar();
+        if (!document.getElementById(BAR_ID)) injectBar();
 
-      // 3) 位置校正 + 存活维护
-      positionBar();
-      if (!document.getElementById(BAR_ID)) injectBar();
-
-      // 4) 低频（3s 一次）：disclaimer 隐藏维护
-      if (slowTick % 3 === 0) hideAnchor();
+        // 4) 低频（3s 一次）：disclaimer 隐藏维护；命中后短路，30s 强制复扫兜底重挂载
+        if (slowTick % 3 === 0) hideAnchor(slowTick % 30 === 0);
+      } catch (eLoop) { /* 单拍失败不终止主循环 */ }
     }, 1000);
 
-    var observer = new MutationObserver(function () {
-      if (!document.getElementById(BAR_ID)) injectBar();
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-    setTimeout(function () { observer.disconnect(); }, 20000);
+    try {
+      var observer = new MutationObserver(function () {
+        if (!document.getElementById(BAR_ID)) injectBar();
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      setTimeout(function () { observer.disconnect(); }, 20000);
+    } catch (eObs) { /* 无 MutationObserver 环境靠 1s 轮询兜底 */ }
   }
 
 

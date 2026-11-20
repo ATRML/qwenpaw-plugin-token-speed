@@ -4,3 +4,7 @@ node_modules/
 .DS_Store
 dist/*.building.js
 *-v*.zip
+
+legacy-results.json
+coverage/
+*.tsbuildinfo

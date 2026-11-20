@@ -6,8 +6,10 @@
 
 - **实时速度**：拦截聊天 SSE 流逐片计时，实时 tokens/s；区分"真流式解码"与"网关补发/中途接入回放"，避免峰值虚高
 - **首字延迟（TTFT）**：从请求发出到第一个 token 到达的耗时
-- **分段明细与折线图**：语义分段展示每段速度曲线，峰值与均值一目了然
-- **用量与计费**：本轮输出 tokens、分项耗时、费用估算（区分前端观测估算与后端官方用量），按内置价目表计算（套餐额度 / 人民币）
+- **分段明细与折线图**：语义分段展示每段速度曲线，峰值与均值一目了然；生成中另有实时速度 sparkline 与燃烧率（credits/min 或 ¥/h）
+- **用量与计费**：本轮输出 tokens、分项耗时、费用估算（区分前端观测估算与后端官方用量），按内置价目表计算（套餐额度 / 人民币 / 百炼 Credits）
+- **阿里云百炼 Token Plan**：credits 计价（credits/万tok 数值 = 官方刊例价 元/百万tok），含阶梯计价、北京 22–08 点官方夜间折扣、qwen4-max-preview 预览期折扣、auto 路由参考区间；Credits 三分量分解（输入/缓存/输出）+ 刊例价折算 + 按套餐档位摊销
+- **今日消耗账本**：本地滚动流水聚合今日回合/输出/credits/人民币/额度与 Top3 模型，刷新恢复不重复计账
 - **会话切换恢复**：切换会话后可恢复当前轮统计；页面刷新后能识别"中途接入"的回合
 - **防御性统计口径**：工具调用参数计入 token、批量冲刷（flush）剔除、静默补发识别
 
@@ -54,7 +56,12 @@ localStorage.setItem("qp_token_speed_pricing", JSON.stringify({
       start: Date.UTC(2026, 10, 1), end: Date.UTC(2026, 11, 1) }
   ]},
   // 3) 内置套餐渠道补模型/调价（plan.base/plan.promo 前置合并，旧键名 afp.* 也兼容）
-  plan: { base: [{ keys: ["my-private-model"], coef: 1.5 }] }
+  plan: { base: [{ keys: ["my-private-model"], coef: 1.5 }] },
+  // 4) 百炼 Token Plan 补模型（credits/万tok = 刊例价 元/百万tok；tiers 按输入 token 阶梯，
+  //    night=北京22–08折扣系数，preview=限时窗口，前置合并优先命中）
+  tokenplan: { models: [
+    { keys: ["my-qwen-fork"], tiers: [{ upTo: Infinity, input: 12, output: 36, cacheHit: 1.5 }], night: 0.4 }
+  ]}
 }));
 ```
 

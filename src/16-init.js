@@ -15,48 +15,56 @@
   // 16-init.js · 初始化与 1s 主循环（停顿补测 / error 帧延迟判定）
   // ════════════════════════════════════════════════════════════
   // ---------- 初始化 ----------
+  // v1.20.0 稳定性：子系统各自隔离——样式/挂载/路由/渠道任何一个失败都不拖垮统计主循环
   function init() {
-    injectStyles();
-    injectBar();
-    installRouteTracking();
-    refreshActiveLlm(false); // v1.8.0：尽早拿真实渠道/模型（并修正旧版结果里错的金额）
+    try { injectStyles(); } catch (e) { /* ignore */ }
+    try { injectBar(); } catch (e) { /* ignore */ }
+    try { installRouteTracking(); } catch (e) { /* ignore */ }
+    try { refreshActiveLlm(false); } catch (e) { /* ignore */ } // v1.8.0：尽早拿真实渠道/模型（并修正旧版结果里错的金额）
+    // v1.20.0：窗口尺寸变化立即重定位（旧版只靠 1s 轮询，拖拽窗口时悬浮条会漂一秒）
+    try { window.addEventListener("resize", function () { try { positionBar(); } catch (e) { /* ignore */ } }); } catch (e) { /* ignore */ }
 
     var lastSession = getSessionId();
     var slowTick = 0;
     setInterval(function () {
-      slowTick++;
-      var curSession = getSessionId();
+      try {
+        slowTick++;
+        var curSession = getSessionId();
 
-      // 1) 活跃流维护：停顿补测（流尾部工具等待漏计兜底）+ 挂起的 error 帧延迟判定
-      Object.keys(states).forEach(function (sid) {
-        var st = states[sid];
-        if (!st || !st.active) return;
-        // 1a) v1.8.0：见过 error 帧后 1.6s 内没有新事件 → 判定流真的死了（有输出按"已中断"）
-        if (st.pendingError && st.lastEventAt && (now() - st.lastEventAt) > 1600) {
-          finishAbnormal(st, st.pendingError, "error_frame");
+        // 1) 活跃流维护：停顿补测（流尾部工具等待漏计兜底）+ 挂起的 error 帧延迟判定
+        Object.keys(states).forEach(function (sid) {
+          var st = states[sid];
+          if (!st || !st.active) return;
+          // 1a) v1.8.0：见过 error 帧后 1.6s 内没有新事件 → 判定流真的死了（有输出按"已中断"）
+          if (st.pendingError && st.lastEventAt && (now() - st.lastEventAt) > 1600) {
+            finishAbnormal(st, st.pendingError, "error_frame");
+            return;
+          }
+          maintainStream(st, now());
+        });
+
+        // 2) 会话切换：fixed bar 不销毁重建（无闪动），只刷新内容
+        if (curSession !== lastSession) {
+          lastSession = curSession;
+          resetAnchorScan(); // v1.20.0
+          refreshBarContent();
           return;
         }
-        maintainStream(st, now());
-      });
 
-      // 2) 会话切换：fixed bar 不销毁重建（无闪动），只刷新内容
-      if (curSession !== lastSession) {
-        lastSession = curSession;
-        refreshBarContent();
-        return;
-      }
+        // 3) 位置校正 + 存活维护
+        positionBar();
+        if (!document.getElementById(BAR_ID)) injectBar();
 
-      // 3) 位置校正 + 存活维护
-      positionBar();
-      if (!document.getElementById(BAR_ID)) injectBar();
-
-      // 4) 低频（3s 一次）：disclaimer 隐藏维护
-      if (slowTick % 3 === 0) hideAnchor();
+        // 4) 低频（3s 一次）：disclaimer 隐藏维护；命中后短路，30s 强制复扫兜底重挂载
+        if (slowTick % 3 === 0) hideAnchor(slowTick % 30 === 0);
+      } catch (eLoop) { /* 单拍失败不终止主循环 */ }
     }, 1000);
 
-    var observer = new MutationObserver(function () {
-      if (!document.getElementById(BAR_ID)) injectBar();
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-    setTimeout(function () { observer.disconnect(); }, 20000);
+    try {
+      var observer = new MutationObserver(function () {
+        if (!document.getElementById(BAR_ID)) injectBar();
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      setTimeout(function () { observer.disconnect(); }, 20000);
+    } catch (eObs) { /* 无 MutationObserver 环境靠 1s 轮询兜底 */ }
   }

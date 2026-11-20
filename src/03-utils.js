@@ -42,6 +42,15 @@
     if (v == null || !isFinite(v)) return "-";
     return v >= 0.05 ? v.toFixed(2) : v.toFixed(4);
   }
+  // v1.20.0 Credits 格式化：与额度同量纲（credits/万tok 数值 = 元/百万tok 刊例价），精度规则一致；
+  // 大额（>=1000）收 1 位小数，避免长数字撑破 chip
+  function fmtCredits(v) {
+    if (v == null || !isFinite(v)) return "-";
+    if (v >= 1000) return v.toFixed(1);
+    return v >= 0.05 ? v.toFixed(2) : v.toFixed(4);
+  }
+  // v1.20.0 刊例价折算：1 credit = 0.01 元刊例价（官方换算的数学推论），credits → 元
+  function creditsToCny(v) { return (v == null || !isFinite(v)) ? null : v / 100; }
 
   // v1.5.0：缓存重计标注（v1.8.0 起只在套餐渠道显示——缓存重计是套餐计费规则，人民币
   // 渠道按缓存价另算，不适用）。实测（2026-09-16 对账）：套餐缓存命中按全额系数重复计费

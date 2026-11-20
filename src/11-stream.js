@@ -93,9 +93,15 @@
   }
 
   function monitorStream(resp, t0, st, epoch) {
-    if (!st || st.epoch > epoch) return;
-    if (st.epoch !== epoch || !st.active) startTurn(t0, st, epoch);
     var reader = resp.body.getReader();
+    // v1.20.0 stability: even for stale/missing state we must cancel the clone we hold.
+    // Response.clone() tees the stream: a branch never read AND never cancelled buffers
+    // the entire response body in memory (leak on stop-and-resend / fast route switches).
+    if (!st || st.epoch > epoch) {
+      try { Promise.resolve(reader.cancel()).catch(function () {}); } catch (e) { /* ignore */ }
+      return;
+    }
+    if (st.epoch !== epoch || !st.active) startTurn(t0, st, epoch);
     var decoder = new TextDecoder();
     var buf = "", lines = [], eventType = "", ended = false, receivedAt = 0;
     function stale() { return st.epoch !== epoch; }
@@ -152,6 +158,12 @@
         }
         receivedAt = now();
         buf += decoder.decode(result.value, {stream: true});
+        // v1.20.0 stability: cap an unterminated SSE line at 4MB. A pathological gateway
+        // must not grow the buffer without bound and drag the whole page down with it.
+        if (buf.length > 4194304) {
+          finishAbnormal(st, "SSE buffer overflow", "read_error");
+          cancel(); return;
+        }
         consume(false);
         if (stale() || ended) { cancel(); return; }
         pump();
@@ -243,6 +255,7 @@
       model: usage.model, provider: usage.provider, channel: channel.channel, channelSrc: "usage",
       cost: money.cost, costUnit: money.costUnit, afp: money.afp, coefMissing: money.coefMissing, priceMissing: money.priceMissing,
       aliasModel: money.aliasModel, coefRange: money.coefRange, afpLo: money.afpLo, afpHi: money.afpHi,
+      tp: money.tp, tpLo: money.tpLo, tpHi: money.tpHi, tpRange: money.tpRange,
       status: aborted ? "abort" : DONE, endCause: aborted ? "user_stop" : "history", errMsg: "",
       ttft: 0, seconds: isFinite(start) && isFinite(end) && end >= start ? (end - start) / 1000 : 0,
       secondsKnown: isFinite(start) && isFinite(end) && end >= start,
@@ -250,6 +263,7 @@
       attached: false, replayTokens: 0, totalGenerated: usage.generated, liveTokens: 0
     };
     saveLastResult(sid, result);
+    appendLedger(sid, result); // v1.20.0: history-restored turns enter the ledger too (turnKey upsert, no double count)
     if (sid === getSessionId()) { refreshBarContent(); refreshDetail(result); }
   }
 
@@ -296,10 +310,12 @@
       var pt = r.promptTokens != null ? r.promptTokens : ((r.cacheHit || 0) + (r.cacheMiss || 0));
       var ct = r.costTokens != null ? r.costTokens : r.tokens;
       var money = moneyFields(cur.channel, r.model, pt, ct, r.cacheHit || 0);
+      // v1.20.0: credits breakdown / discount / auto-range participate in the change signature too
+      function tpSig(x) { return x.tp ? (x.tp.credits + ":" + x.tp.factor) : (x.tpRange ? ("r:" + x.tpLo + ":" + x.tpHi) : "n"); }
       var before = [r.cost == null ? "n" : r.cost, r.afp == null ? "n" : r.afp, r.channel || "",
-        r.afpLo == null ? "n" : r.afpLo, r.afpHi == null ? "n" : r.afpHi].join("|");
+        r.afpLo == null ? "n" : r.afpLo, r.afpHi == null ? "n" : r.afpHi, tpSig(r)].join("|");
       var after = [money.cost == null ? "n" : money.cost, money.afp == null ? "n" : money.afp, money.channel,
-        money.afpLo == null ? "n" : money.afpLo, money.afpHi == null ? "n" : money.afpHi].join("|");
+        money.afpLo == null ? "n" : money.afpLo, money.afpHi == null ? "n" : money.afpHi, tpSig(money)].join("|");
       if (before === after) return;
       r.cost = money.cost;
       r.afp = money.afp;
@@ -313,7 +329,9 @@
       r.afpHi = money.afpHi;
       r.costUnit = money.costUnit;
       r.coefRange = money.coefRange;
+      r.tp = money.tp; r.tpLo = money.tpLo; r.tpHi = money.tpHi; r.tpRange = money.tpRange;
       saveLastResult(sid2, r);
+      appendLedger(sid2, r); // v1.20.0: keep the ledger amount in sync after retroactive re-pricing
       refreshBarContent();
       refreshDetail(r);
     } catch (e) { /* 金额补算失败不影响统计 */ }

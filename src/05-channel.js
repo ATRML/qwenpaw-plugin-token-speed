@@ -37,7 +37,16 @@
     // 顺序关键：/api/coding 必须在 /api/plan 前判（两者都可能含 "coding" 无关，但 base 不重叠，保险起见先判）
     if (/\/api\/coding(\/|$)/.test(bu) || /coding[_\-]?plan/.test(pid)) return "coding";
     if (/agentplan|agent-plan|agent_plan/.test(pid) || /\/api\/plan\//.test(bu)) return "plan";
+    // v1.20.0 阿里云百炼 Token Plan：专属端点 token-plan.<region>.maas.aliyuncs.com，
+    // 或 provider 名含 tokenplan/token-plan/token_plan。base_url 证据优先——同一个 qwen 模型名
+    // 在百炼按量/Token Plan/其他渠道都在卖，只认端点不认名字（与 v1.8.0 修 DeepSeek 误判同一原则）
+    if (/token[-_]?plan/.test(pid) || bu.indexOf("token-plan.") >= 0 || bu.indexOf("maas.aliyuncs.com") >= 0) return "tokenplan";
     if (pid === "deepseek" || pid.indexOf("deepseek") >= 0 || bu.indexOf("deepseek.com") >= 0) return "deepseek";
+    // v1.20.0 阿里云 Coding Plan 专属端点 coding.dashscope.aliyuncs.com（与 /api/coding 同渠道，不套金额表）
+    if (bu.indexOf("coding.dashscope") >= 0) return "coding";
+    // v1.20.0 百炼按量付费（dashscope.aliyuncs.com 通用端点 / provider 名含 dashscope|bailian）：
+    // 人民币刊例价计价，与 Token Plan 的 credits 体系独立（官方明示两套额度不互通）
+    if (bu.indexOf("dashscope.aliyuncs.com") >= 0 || /dashscope|bailian/.test(pid)) return "dashscope";
     // v1.18.0：自定义渠道映射（纯数据：PRICING.customChannels，可经 localStorage 覆盖层注入）——
     // provider_id/base_url 命中子串 → 返回配置的渠道名；没配置/没命中照旧落 other
     var _cc = customChannelOf(pid, bu);
@@ -108,10 +117,10 @@
   var mapFetching = false;
   function maybeLoadProviderMap() {
     if (!activeLlm || !activeLlm.providerId) return;
-    // provider_id 本身就能定性（套餐渠道 / DeepSeek 官方）就不用去拉 base_url 了；
+    // provider_id 本身就能定性（套餐渠道 / DeepSeek 官方 / 百炼系）就不用去拉 base_url 了；
     // 只有"认不出"的自定义 provider（例如 huoshanahent 这种）才需要 base_url 佐证
     var ch0 = resolveChannel(activeLlm.providerId, "");
-    if (ch0 === "plan" || ch0 === "deepseek") return;
+    if (ch0 === "plan" || ch0 === "deepseek" || ch0 === "coding" || ch0 === "tokenplan" || ch0 === "dashscope") return;
     var cached = null;
     try { cached = JSON.parse(localStorage.getItem(PROVIDER_MAP_KEY) || "null"); } catch (e) { /* ignore */ }
     if (cached && cached.map && cached.ts && (Date.now() - cached.ts) < PROVIDER_MAP_TTL) {

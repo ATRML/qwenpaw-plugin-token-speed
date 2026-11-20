@@ -97,6 +97,8 @@
     st.totalGenerated = 0;
     st.lastSpeed = 0;        // v1.7.0
     st.replayEndSeen = false; // v1.7.0
+    st.speedHist = [];        // v1.20.0 sparkline 逐轮重置
+    st.lastSpeedSampleT = 0;
     // v1.8.0 计费渠道/收尾取证逐轮重置（否则上一轮的 provider 会在本轮 usage 到达前
     // 冒充本轮的渠道证据）
     st.providerUsage = "";

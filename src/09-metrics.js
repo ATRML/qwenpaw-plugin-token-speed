@@ -10,6 +10,30 @@
     return (st && st.channel) || "";
   }
 
+  // v1.20.0 燃烧率：按当前解码速度，每分钟烧掉多少（credits/min 或 ¥/h）。
+  // 只算输出侧——输入是请求时一次性计费，不属于流式期间的"燃烧"。无价表 → null（不猜）。
+  function burnRateOf(channel, model, speed, promptTok) {
+    if (!(speed > 0)) return null;
+    var ch = String(channel || "");
+    if (ch === "tokenplan") {
+      var e = tokenplanEntryFor(model);
+      if (!e) return null;
+      var tier = tpTier(e, promptTok || 0).tier;
+      var f = tpFactor(e, Date.now()).factor;
+      return { value: speed * tier.output / 10000 * 60 * f, unit: "credits/min" };
+    }
+    var outPrice = null;
+    if (ch === "deepseek") {
+      var t = priceTableFor(model);
+      if (t) outPrice = ((isPeakHour(t) && t.peak) ? t.peak : t.offPeak).output;
+    } else if (ch === "dashscope") {
+      var de = tokenplanEntryFor(model);
+      if (de) outPrice = tpTier(de, promptTok || 0).tier.output * ((de.bailianPeak && tpNightActive(Date.now())) ? de.night : 1);
+    }
+    if (outPrice == null) return null;
+    return { value: speed * outPrice / 1e6 * 3600, unit: "¥/h" };
+  }
+
   // v1.7.0：三处"生成中"渲染（tick / 停顿补测 / 会话切换刷新）共用同一份视图数据，
   // 避免口径各写一份漂移（旧版会话切换后的刷新会丢 attached 标记、速度显示 0）
   function observedWaitMs(st) {
@@ -22,9 +46,13 @@
     var _tool = st.toolTokens || 0;
     var _costTok = st.tokenCount + _tool + _replay; // v1.12.0：实时金额含工具参数
     var _ch = channelOf(st);
+    // v1.20.0：实时金额统一走 moneyFields（与 endTurn/liveSnapshot 同源，杜绝三处各写一份漂移）
+    var _m = moneyFields(_ch, st.model, st.promptTokens, _costTok, st.cacheHitTokens);
+    var _speed = (typeof opts.speed === "number") ? opts.speed : (st.lastSpeed || 0);
     return {
       ttft: st.attached ? 0 : st.ttft,
-      speed: (typeof opts.speed === "number") ? opts.speed : (st.lastSpeed || 0),
+      speed: _speed,
+      model: st.model,
       tokens: _costTok,     // 已生成 = 回放 + 接入后（总量口径，不含工具参数）
       toolTokens: _tool,                   // v1.12.0 工具参数单列
       attached: st.attached,
@@ -35,9 +63,18 @@
       pauseSec: observedWaitMs(st) / 1000,
       modelWaitSec: (st.modelWaitMs + (st.toolResumeAt ? Math.max(0, now() - st.toolResumeAt) : 0)) / 1000,
       channel: _ch,
-      cost: calcCost(_ch, st.model, st.promptTokens, _costTok, st.cacheHitTokens),
-      costUnit: costUnitFor(_ch, st.model),
-      afp: calcPlan(_ch, st.model, st.promptTokens, _costTok)
+      cost: _m.cost,
+      costUnit: _m.costUnit,
+      afp: _m.afp,
+      afpLo: _m.afpLo,
+      afpHi: _m.afpHi,
+      coefRange: _m.coefRange,
+      // v1.20.0 TokenPlan 明细 / auto 区间 / 燃烧率（其他渠道 tp=null，UI 判空）
+      tp: _m.tp,
+      tpLo: _m.tpLo,
+      tpHi: _m.tpHi,
+      tpRange: _m.tpRange,
+      burnRate: burnRateOf(_ch, st.model, _speed, st.promptTokens)
     };
   }
 
@@ -82,6 +119,12 @@
     }
     if (speed > st.peakMax) st.peakMax = speed;
     st.lastSpeed = speed; // v1.7.0：详情面板实时刷新要显示这个速率
+    // v1.20.0：sparkline 采样（≥200ms 一点，环形 120 点 ≈ 最近 24s+ 的速度轨迹）
+    if (t - (st.lastSpeedSampleT || 0) >= 200) {
+      st.lastSpeedSampleT = t;
+      st.speedHist.push([t, speed]);
+      if (st.speedHist.length > 120) st.speedHist.shift();
+    }
     if (st.__sid === getSessionId()) {
       renderRunning(runningView(st));
     }
@@ -275,6 +318,11 @@
       afpLo: _money.afpLo,
       afpHi: _money.afpHi,
       coefRange: _money.coefRange,
+      // v1.20.0 TokenPlan credits 三分量明细 / auto 参考区间（其他渠道为 null）
+      tp: _money.tp,
+      tpLo: _money.tpLo,
+      tpHi: _money.tpHi,
+      tpRange: _money.tpRange,
       errMsg: st.errMsg || "",
       endCause: st.endCause || "",
       model: st.model,
@@ -323,9 +371,11 @@
     if (st.endCause !== "page_refresh") {
       flushCensus();
       saveLastResult(st.__sid, st.lastResult); // 按流所属会话存
+      appendLedger(st.__sid, st.lastResult);   // v1.20.0 会话账本（sid+messageId upsert，刷新恢复不重复计账）
       if (st.__sid === getSessionId()) renderDone(st.lastResult);
     }
     // 释放大字段
     st.fullText = ""; st.seenFullText = ""; st.window = []; st.segments = [];
     st.textSnapshots = Object.create(null); st.evWin = []; st.probeWin = []; st.replayWin = [];
+    st.speedHist = []; // v1.20.0
   }

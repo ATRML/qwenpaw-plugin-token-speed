@@ -35,6 +35,8 @@
       liveTokens: 0, liveStartT: 0, totalGenerated: 0,
       // v1.7.0：面板实时刷新要用的实时速率 / 后端显式回放结束标记
       lastSpeed: 0, replayEndSeen: false,
+      // v1.20.0：实时速度 sparkline 环形缓冲 [t, speed]（面板头图用，tick 采样，上限 120 点）
+      speedHist: [], lastSpeedSampleT: 0,
       // v1.8.0 计费渠道与收尾取证
       providerUsage: "",   // 本回合 SSE usage 里带的 provider_id（最准证据）
       channel: "",         // plan / deepseek / other / ""（未识别）
