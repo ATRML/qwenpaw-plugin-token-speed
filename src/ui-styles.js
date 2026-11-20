@@ -1,7 +1,7 @@
-  // Token Speed 1.20 · Instrument Deck visual system
-  // 设计语言：炭黑玻璃底 + 三色语义（薄荷=速度 / 金=Credits / 蓝=输出），
-  // 悬浮条是仪表条，面板是飞行数据读数。所有颜色走 CSS 变量，dream-skin 磨砂兼容块原样保留。
-  var styles = `
+// Instrument Deck 视觉系统（原 12-ui-styles）
+// 设计语言：炭黑玻璃底 + 三色语义（薄荷=速度 / 金=Credits / 蓝=输出），
+// 悬浮条是仪表条，面板是飞行数据读数。所有颜色走 CSS 变量，dream-skin 磨砂兼容块原样保留。
+export var styles = `
     #qp-token-speed-bar, #qp-token-speed-detail {
       --qp-bg: rgba(16,22,31,.96); --qp-panel: #131b26; --qp-ink: #eef3fa; --qp-mut: #8b99ad;
       --qp-mint: #7fe7c4; --qp-blue: #8fb8ff; --qp-gold: #ffd479; --qp-warn: #f6ce9e; --qp-err: #ff9d9d;
@@ -172,10 +172,10 @@
     }
   `;
 
-  function injectStyles() {
-    if (document.getElementById("qp-token-speed-styles")) return;
-    var s = document.createElement("style");
-    s.id = "qp-token-speed-styles";
-    s.textContent = styles;
-    (document.head || document.documentElement).appendChild(s);
-  }
+export function injectStyles() {
+  if (document.getElementById("qp-token-speed-styles")) return;
+  var s = document.createElement("style");
+  s.id = "qp-token-speed-styles";
+  s.textContent = styles;
+  (document.head || document.documentElement).appendChild(s);
+}

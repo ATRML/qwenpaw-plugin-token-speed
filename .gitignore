@@ -5,6 +5,14 @@ node_modules/
 dist/*.building.js
 *-v*.zip
 
+# 测试 bundle（暴露 testApi，仅本地无头驱动，不进公开仓库/发布包）
+dist/test-bundle.js
+dist/lifecycle-bundle.js
+
+# 内部笔记（含本机路径/实测记录，本地保留，不上传）
+HANDOVER.md
+LIVE_QA.md
+
 legacy-results.json
 coverage/
 *.tsbuildinfo

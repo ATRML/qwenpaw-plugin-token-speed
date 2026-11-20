@@ -1,3 +1,40 @@
+# v2.0.0 — 2026-11-21：架构级重构（真实 ESM + esbuild + 渲染总线）+ 工程工具链 + 测试重做
+
+行为与 v1.20.0 完全一致（计价 golden 值、流式口径、UI 语义全部由回归锁定）；本次只换骨架，不换精密逻辑。
+
+## 架构
+
+- **真实 ESM + esbuild 打包**：取代"按序号拼接恰好 16 个片段"的字符串构建。`src/index.js` 为生产入口，esbuild 打成单文件 IIFE `dist/index.js`，自包含、零运行时依赖。模块数量不再受硬约束。
+- **渲染总线（依赖倒置）**：新增 `renderer.js`，引擎（turn/metrics/stream/init）只经总线调用 UI，不直接依赖 DOM。UI 模块加载后注入真实实现；UI 缺失或失败时引擎静默降级。测试可注入 noop，无需 DOM mock。
+- **数据与逻辑分离**：价目表抽成纯数据 `pricing-data.js`（PRICING / TP_PLANS / 覆盖层 IIFE），计价引擎留在 `pricing.js`。调价只改数据。
+- **跨模块可变态集中**：新增 `store.js` 收纳 pageLeaving / streamEpoch / activeLlm / providerMap / states，解决 ESM 只读绑定无法跨模块重赋值的问题。
+- **函数体逐字保留**：历经 P0/P1 多轮修复的流式/计价/分段逻辑原样保留，仅改 import/export 与 store/renderer 引用。`escHtml` 提升为 `utils.js` 共享导出，打破 bar↔panel 循环依赖。
+- 删除 16 个旧拼接片段（`src/01-core.js … 16-init.js`），由 23 个职责清晰的 ESM 模块取代。
+
+## 工程工具链
+
+- `package.json`（type:module）+ npm scripts：build / lint / format / typecheck / test / verify。
+- ESLint 9 flat config（src 浏览器全局 + `__QP_TS_VERSION__`，scripts/test 按 ESM/CJS 分别配置），零告警。
+- Prettier + EditorConfig 统一风格。
+- `tsc` checkJs 类型检查（jsconfig，strict:false）：渲染总线签名以 JSDoc 声明契约，动态 DOM/fetch 访问定向标注，零类型错误。
+- `build.py` 改为委托 esbuild 的兼容入口（`python build.py` 仍可用）。
+
+## 测试重做
+
+- **66 行为回归**（`test/regression.cjs`）：计价 golden、流式口径、稳定性、UI 语义。harness 改为直接 eval esbuild 测试 bundle（`test/entry.js` 暴露 `window.testApi`、置空渲染总线），取代旧的 marker 字符串注入。
+- **13 生命周期专项**（`test/lifecycle.cjs`，新增）：用 DOM mock 覆盖旧套件盲区——双注入守卫、injectBar 幂等、init 主循环（error 帧延迟判定/静默补测）、渲染总线降级、pagehide 分类、路由切换、hideAnchor DOM 卫生与短路、ESC/外点关面板、详情面板增量实时刷新。
+- **退役 v1.13 文案锁套件**（`test_legacy.cjs` / `test_all.cjs`，27 场景）：其精确文案断言是脆弱债，行为价值已由上述 79 个行为断言覆盖。旧文件保留在 git 历史。
+- 测试入口单独打包（`dist/test-bundle.js` / `dist/lifecycle-bundle.js`），**生产 `dist/index.js` 不暴露任何测试钩子**。
+- 新增最小无头 seam：`store.testMode` 禁用后台渠道刷新（生产永不置位），避免测试 fetch 污染宿主响应体。
+
+## 公开仓库卫生
+
+- 面向 GitHub 公开：README 重写（架构/开发/计价来源/隐私），新增 CONTRIBUTING 与 CI。
+- 清除内部实测记录与本机路径；自定义 provider 示例名中立化；测试会话 ID 中立化。
+- 统计与账本仅本机 localStorage，无任何上报。
+
+---
+
 # v1.20.0 — 2026-11-20：阿里云百炼 Token Plan credits 计价 + 仪表甲板前端重设计 + 稳定性加固
 
 ## 新计价体系：百炼 Token Plan（credits）与百炼按量（dashscope）
