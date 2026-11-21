@@ -13,6 +13,7 @@ dist/lifecycle-bundle.js
 HANDOVER.md
 LIVE_QA.md
 AGENT_HANDOFF.md
+EXECUTION_BRIEF.md
 
 legacy-results.json
 coverage/
