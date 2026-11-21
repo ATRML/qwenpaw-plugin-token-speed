@@ -1,7 +1,7 @@
 {
   "name": "qwenpaw-plugin-token-speed",
-  "version": "2.0.0",
-  "description": "QwenPaw plugin: real-time LLM token speed, usage and billing (Agent Plan quota / CNY / Aliyun Bailian Token Plan credits).",
+  "version": "2.1.0",
+  "description": "QwenPaw plugin: real-time LLM token speed, usage and multi-provider billing (OpenAI/Anthropic/Google USD list price; Aliyun Bailian CNY / Token Plan credits; DeepSeek CNY; Agent Plan quota). Currency-bucketed, evidence-gated channel detection.",
   "type": "module",
   "private": true,
   "scripts": {

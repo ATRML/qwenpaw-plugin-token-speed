@@ -11,7 +11,8 @@ import { patchFetch, monitorStream, finishAbnormal, hydrateChatHistory, applyBil
 import { extractUsage, ratioFor } from "../src/tokens.js";
 import { resolveChannel } from "../src/channel.js";
 import {
-  calcTokenPlan, calcTokenPlanRange, tokenplanEntryFor, tpNightActive, beijingHour, calcDashscope, moneyFields
+  calcTokenPlan, calcTokenPlanRange, tokenplanEntryFor, tpNightActive, beijingHour, calcDashscope, moneyFields,
+  calcUsd, usdEntryFor, isUsdChannel, costUnitFor, channelHasPriceTable
 } from "../src/pricing.js";
 import { PRICING, TP_PLANS } from "../src/pricing-data.js";
 import { appendLedger, ledgerToday, loadLedger } from "../src/ledger.js";
@@ -39,6 +40,7 @@ window.testApi = {
   maintain: maintainStream,
   resolveChannel, calcTokenPlan, calcTokenPlanRange, tokenplanEntryFor, tpNightActive, beijingHour,
   calcDashscope, moneyFields, burnRateOf, PRICING, TP_PLANS,
+  calcUsd, usdEntryFor, isUsdChannel, costUnitFor, channelHasPriceTable,
   appendLedger, ledgerToday, loadLedger, saveLastResult, loadLastResult,
   buildDetailHead, buildRunningHtml, costChipHtml,
   renderer

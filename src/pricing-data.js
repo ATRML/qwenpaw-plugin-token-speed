@@ -58,6 +58,58 @@ export const PRICING = {
   // —— 自定义渠道映射：resolveChannel 在内置判定后、other 前查这张表
   customChannels: [],
   // ════════════════════════════════════════════════════════════════════
+  // 通用 USD 渠道（OpenAI / Anthropic / Google Gemini）——标准档刊例价，美元/百万 token。
+  // 快照 2026-11-21，标准（Standard）处理档；非 batch/flex/priority。以官方实时页为准，
+  // 可经覆盖层 usd.<provider>.models 前置修正。未入表模型 → 不显示金额（不猜）。
+  // 来源：platform.openai.com/docs/pricing · docs.anthropic.com/en/docs/about-claude/pricing
+  //       · ai.google.dev/gemini-api/docs/pricing
+  // 结构同 tokenplan：{ keys, exact?, tiers:[{upTo, input, output, cacheHit?}] }，
+  //   tiers 按单次请求输入 token 阶梯（upTo=Infinity 不分阶梯）；cacheHit 缺省按输入价估。
+  // 数组顺序 = 匹配优先级：长名/带后缀排前（避免 "gpt-5" 抢先命中 "gpt-5-mini"）。
+  // ════════════════════════════════════════════════════════════════════
+  usd: {
+    openai: {
+      models: [
+        { keys: ["gpt-5.4"], tiers: [{ upTo: 272000, input: 2.5, cacheHit: 0.25, output: 15 }, { upTo: Infinity, input: 5, cacheHit: 0.5, output: 22.5 }] },
+        { keys: ["gpt-5.5"], tiers: [{ upTo: Infinity, input: 5, cacheHit: 0.5, output: 30 }] },
+        { keys: ["gpt-5-mini"], tiers: [{ upTo: Infinity, input: 0.25, cacheHit: 0.025, output: 2 }] },
+        { keys: ["gpt-5-nano"], tiers: [{ upTo: Infinity, input: 0.05, cacheHit: 0.005, output: 0.4 }] },
+        { keys: ["gpt-5-chat"], tiers: [{ upTo: Infinity, input: 1.25, cacheHit: 0.125, output: 10 }] },
+        { keys: ["gpt-5"], tiers: [{ upTo: Infinity, input: 1.25, cacheHit: 0.125, output: 10 }] },
+        { keys: ["gpt-4.1-mini"], tiers: [{ upTo: Infinity, input: 0.4, cacheHit: 0.1, output: 1.6 }] },
+        { keys: ["gpt-4.1-nano"], tiers: [{ upTo: Infinity, input: 0.1, cacheHit: 0.025, output: 0.4 }] },
+        { keys: ["gpt-4.1"], tiers: [{ upTo: Infinity, input: 2, cacheHit: 0.5, output: 8 }] },
+        { keys: ["gpt-4o-mini"], tiers: [{ upTo: Infinity, input: 0.15, cacheHit: 0.075, output: 0.6 }] },
+        { keys: ["gpt-4o"], tiers: [{ upTo: Infinity, input: 2.5, cacheHit: 1.25, output: 10 }] },
+        { keys: ["o4-mini"], tiers: [{ upTo: Infinity, input: 1.1, cacheHit: 0.275, output: 4.4 }] },
+        { keys: ["o3-mini"], tiers: [{ upTo: Infinity, input: 1.1, cacheHit: 0.55, output: 4.4 }] },
+        { keys: ["o3"], tiers: [{ upTo: Infinity, input: 2, cacheHit: 0.5, output: 8 }] },
+        { keys: ["o1-mini"], tiers: [{ upTo: Infinity, input: 1.1, cacheHit: 0.55, output: 4.4 }] },
+        { keys: ["o1"], tiers: [{ upTo: Infinity, input: 15, cacheHit: 7.5, output: 60 }] }
+      ]
+    },
+    anthropic: {
+      models: [
+        { keys: ["opus-4-5", "opus-4.5", "opus-4-6", "opus-4.6", "opus-5"], tiers: [{ upTo: Infinity, input: 5, cacheHit: 0.5, output: 25 }] },
+        { keys: ["opus-4-1", "opus-4.1"], tiers: [{ upTo: Infinity, input: 15, cacheHit: 1.5, output: 75 }] },
+        { keys: ["opus"], tiers: [{ upTo: Infinity, input: 15, cacheHit: 1.5, output: 75 }] },
+        { keys: ["sonnet"], tiers: [{ upTo: Infinity, input: 3, cacheHit: 0.3, output: 15 }] },
+        { keys: ["haiku-5-5", "haiku-5.5"], tiers: [{ upTo: 100000, input: 0.1, cacheHit: 0.01, output: 0.5 }, { upTo: Infinity, input: 0.5, cacheHit: 0.05, output: 2.5 }] },
+        { keys: ["haiku-4-5", "haiku-4.5"], tiers: [{ upTo: Infinity, input: 1, cacheHit: 0.1, output: 5 }] },
+        { keys: ["haiku-3-5", "haiku-3.5"], tiers: [{ upTo: Infinity, input: 0.8, cacheHit: 0.08, output: 4 }] },
+        { keys: ["haiku"], tiers: [{ upTo: Infinity, input: 0.25, cacheHit: 0.03, output: 1.25 }] }
+      ]
+    },
+    google: {
+      models: [
+        { keys: ["gemini-2.5-flash-lite"], tiers: [{ upTo: Infinity, input: 0.1, cacheHit: 0.01, output: 0.4 }] },
+        { keys: ["gemini-2.5-flash"], tiers: [{ upTo: Infinity, input: 0.3, cacheHit: 0.03, output: 2.5 }] },
+        { keys: ["gemini-2.5-pro"], tiers: [{ upTo: 200000, input: 1.25, cacheHit: 0.125, output: 10 }, { upTo: Infinity, input: 2.5, cacheHit: 0.25, output: 15 }] },
+        { keys: ["gemini-3.1-pro", "gemini-3-pro-preview"], tiers: [{ upTo: 200000, input: 2, cacheHit: 0.2, output: 12 }, { upTo: Infinity, input: 4, cacheHit: 0.4, output: 18 }] }
+      ]
+    }
+  },
+  // ════════════════════════════════════════════════════════════════════
   // 阿里云百炼 Token Plan（credits）与百炼按量（dashscope，人民币）
   //
   // 官方换算（用量与额度页 qwen3.6-plus 对拍示例实证）：
@@ -166,5 +218,10 @@ export const TP_PLANS = [
     if (u.generic && entryArr(u.generic.models)) PRICING.generic.models = u.generic.models;
     if (entryArr(u.customChannels)) PRICING.customChannels = u.customChannels;
     if (u.tokenplan && tpArr(u.tokenplan.models)) PRICING.tokenplan.models = u.tokenplan.models.concat(PRICING.tokenplan.models);
+    if (u.usd && typeof u.usd === "object") {
+      ["openai", "anthropic", "google"].forEach(function (prov) {
+        if (u.usd[prov] && tpArr(u.usd[prov].models)) PRICING.usd[prov].models = u.usd[prov].models.concat(PRICING.usd[prov].models);
+      });
+    }
   } catch (e) { console.warn("[token-speed] pricing 覆盖层应用失败，使用内置价目", e); }
 })();

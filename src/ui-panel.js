@@ -97,6 +97,10 @@ export function billingCardHtml(r) {
     label = '套餐抵扣';
     num = fmtMoney(r.cost, "") + '<small>额度</small>';
     cap = escHtml(channelLabel(r.channel));
+  } else if (r.cost != null && r.costUnit === "usd") {
+    label = '本轮费用';
+    num = fmtMoney(r.cost, '$');
+    cap = escHtml(channelLabel(r.channel)) + ' · 美元刊例价';
   } else if (r.cost != null) {
     label = '本轮费用';
     num = fmtMoney(r.cost, '¥');
@@ -151,6 +155,7 @@ export function ledgerHtml() {
   var parts = ['<span>' + s.turns + ' 回合</span>', '<span>输出 ' + fmtNum(s.out) + ' tok</span>'];
   if (s.credits > 0) parts.push('<span class="qp-lg-cr">◈ ' + fmtCredits(s.credits) + ' credits</span>');
   if (s.cny > 0) parts.push('<span class="qp-lg-cny">' + fmtMoney(s.cny, '¥') + '</span>');
+  if (s.usd > 0) parts.push('<span class="qp-lg-usd">' + fmtMoney(s.usd, '$') + '</span>');
   if (s.plan > 0) parts.push('<span class="qp-lg-plan">▣ ' + fmtPlan(s.plan) + ' 额度</span>');
   var tierSel = "";
   if (s.credits > 0) {
@@ -199,7 +204,9 @@ export function buildDetailHead(r) {
     ? row("套餐抵扣", fmtMoney(r.cost, "") + " 额度", channelTip(r.channel, r.provider))
     : r.costUnit === "credits"
       ? row("Credits 消耗", fmtCredits(r.cost) + " credits", channelTip(r.channel, r.provider))
-      : row("费用", fmtMoney(r.cost, "¥"), channelTip(r.channel, r.provider));
+      : r.costUnit === "usd"
+        ? row("费用", fmtMoney(r.cost, "$"), channelTip(r.channel, r.provider))
+        : row("费用", fmtMoney(r.cost, "¥"), channelTip(r.channel, r.provider));
   if (r.coefRange && r.afpLo != null) usage += row("套餐抵扣 · 参考", fmtPlanRange({lo:r.afpLo,hi:r.afpHi}), ALIAS_TIP);
   if (r.tpRange && r.tpLo != null) usage += row("Credits · 参考", fmtCredits(r.tpLo) + "~" + fmtCredits(r.tpHi) + " credits", "auto 智能路由底层模型不定，按全表当前时刻给参考区间");
   if (r.coefMissing || r.priceMissing || !r.channel) usage += row("计费", r.coefMissing ? "系数未知" : r.priceMissing ? "无价表" : "渠道未识别", channelTip(r.channel,r.provider));
@@ -208,7 +215,7 @@ export function buildDetailHead(r) {
   // 燃烧率 caption：当前速度下每分钟烧多少（只算输出侧）
   var burnHtml = "";
   if (running && r.burnRate && r.burnRate.value > 0) {
-    burnHtml = '<div class="qp-d-burn">燃烧率 ≈' + (r.burnRate.unit === "credits/min" ? fmtCredits(r.burnRate.value) + ' credits/min' : fmtMoney(r.burnRate.value, '¥') + '/h') + '</div>';
+    burnHtml = '<div class="qp-d-burn">燃烧率 ≈' + (r.burnRate.unit === "credits/min" ? fmtCredits(r.burnRate.value) + ' credits/min' : r.burnRate.unit === "usd/min" ? fmtMoney(r.burnRate.value, '$') + '/min' : fmtMoney(r.burnRate.value, '¥') + '/h') + '</div>';
   }
   var sparkHtml = running ? buildSparkline(r.speedHist) : "";
   var html = '<div class="qp-d-title"><div><div class="qp-d-eyebrow">TOKEN SPEED</div><div class="qp-d-heading" id="qp-d-heading">本轮生成概览</div><div class="qp-d-meta">' + escHtml(r.model || "未知模型") + (r.aliasModel ? " · Auto" : "") + ' · ' + channelLabel(r.channel) + (fmtAge(r) ? ' · ' + fmtAge(r) : '') + '</div></div><div class="qp-d-tools"><span class="qp-d-badge ' + escHtml(r.status) + '" title="' + escHtml(info.tip) + '">' + info.text + '</span><button type="button" class="qp-d-close" id="qp-d-close" aria-label="关闭生成详情">×</button></div></div>' + note +

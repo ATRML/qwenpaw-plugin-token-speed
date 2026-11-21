@@ -7,7 +7,7 @@ import { pushWin, closeCurrentSeg, measuredSegTokens } from "./state.js";
 import { getSessionId } from "./session.js";
 import { getCurrentModel } from "./model.js";
 import { resolveChannel, providerBaseUrl, currentChannel, refreshActiveLlm } from "./channel.js";
-import { tokenplanEntryFor, tpTier, tpFactor, priceTableFor, isPeakHour, tpNightActive, moneyFields } from "./pricing.js";
+import { tokenplanEntryFor, tpTier, tpFactor, priceTableFor, isPeakHour, tpNightActive, moneyFields, usdEntryFor, isUsdChannel } from "./pricing.js";
 import { calibrateRatio, estimateTokens } from "./tokens.js";
 import { loadLastResult, saveLastResult } from "./persistence.js";
 import { appendLedger } from "./ledger.js";
@@ -33,6 +33,12 @@ export function burnRateOf(channel, model, speed, promptTok) {
     var tier = tpTier(e, promptTok || 0).tier;
     var f = tpFactor(e, Date.now()).factor;
     return { value: speed * tier.output / 10000 * 60 * f, unit: "credits/min" };
+  }
+  if (isUsdChannel(ch)) {
+    var ue = usdEntryFor(ch, model);
+    if (!ue) return null;
+    var ut = tpTier(ue, promptTok || 0).tier;
+    return { value: speed * ut.output / 1e6 * 60, unit: "usd/min" };
   }
   var outPrice = null;
   if (ch === "deepseek") {

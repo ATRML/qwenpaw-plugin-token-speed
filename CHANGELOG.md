@@ -1,3 +1,25 @@
+# v2.1.0 — 2026-11-21：通用性增强（多 provider 美元刊例价 + 货币分桶 + 文案中立化）
+
+从"阿里计价器"重定位为"通用 LLM 计价器"。阿里 Token Plan 的证据门控路径一字未改，既有 79 个行为/生命周期断言全部保持绿色；本次为纯增量。
+
+## 通用计价
+
+- **内置三大 provider 美元刊例价**：`pricing-data.js` 新增 `PRICING.usd`（OpenAI / Anthropic / Google Gemini），标准档快照 2026-11-21，复用既有 `tiers` 阶梯结构。OpenAI 含 gpt-5.x/4.1/4o/o 系，Anthropic 含 opus/sonnet/haiku 系，Google 含 gemini-2.5/3.x-pro 系；长上下文按输入 token 跳档（gpt-5.4 >272K、Gemini Pro >200K、Haiku 5.5 >100K）。只收有把握的官方价，未入表模型不显示金额（不猜）。
+- **渠道自动识别**：`channel.js` 在 dashscope 之后、自定义渠道之前插入 openai/anthropic/google 判定，只认 provider 名/端点证据（api.openai.com / api.anthropic.com / generativelanguage.googleapis.com）。不做模型名兜底——第三方转售 gpt 不会被误判成官方刊例价；Google Vertex（aiplatform）价不同，不套 Gemini 标准价。
+- **货币维度**：新增 `usd` 计价单位。`pricing.js` 增 `usdEntryFor`/`calcUsd`/`isUsdChannel`，`costUnitFor`/`channelHasPriceTable`/`calcCost` 接入 USD 分支；`moneyFields` 通用传递无需改。账本 `ledger.js` 增 `usd` 独立分桶（含 `byModel.usd`），美元/人民币/Credits/额度互不混算。
+- **UI 货币感知**：悬浮条费用 chip、详情计费卡、用量行、今日账本、燃烧率（新增 `$/min`）均按 `costUnit` 分支显示 `$`/`¥`/`◈`/`▣`；渠道标签与 hover 说明新增三 provider。USD 面板全篇无 ¥、无 credits 摊销选择。
+- **覆盖层**：`usd.<provider>.models` 经 tiers 校验前置合并，可修正/补充美元价目；坏结构整份忽略不崩。
+
+## 文案中立化
+
+- `plugin.json` / `package.json` / `README` 重定位为通用 LLM 计价器，多 provider 美元计价前置，阿里百炼降为受支持渠道之一。README 增美元计价来源（OpenAI/Anthropic/Google 官方页）与 USD 覆盖层示例。
+
+## 测试
+
+- 新增 8 个 USD 回归场景（渠道识别证据门控/Vertex 不误判/转售不猜、三 provider 计价 golden、长上下文阶梯、未入表不猜、端到端 + 多货币账本分桶、USD UI 语义、USD 覆盖层）。回归 66 → 73，生命周期 13 不变，合计 86 全绿。ESLint / tsc checkJs 零告警。
+
+---
+
 # v2.0.0 — 2026-11-21：架构级重构（真实 ESM + esbuild + 渲染总线）+ 工程工具链 + 测试重做
 
 行为与 v1.20.0 完全一致（计价 golden 值、流式口径、UI 语义全部由回归锁定）；本次只换骨架，不换精密逻辑。

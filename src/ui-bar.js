@@ -22,6 +22,9 @@ export function channelLabel(ch) {
   if (ch === "deepseek") return "DeepSeek 官方";
   if (ch === "tokenplan") return "百炼 Token Plan";
   if (ch === "dashscope") return "百炼按量";
+  if (ch === "openai") return "OpenAI";
+  if (ch === "anthropic") return "Anthropic";
+  if (ch === "google") return "Google Gemini";
   if (ch === "other") return "其他渠道";
   return "未识别";
 }
@@ -32,6 +35,9 @@ export function channelTip(ch, provider) {
   if (ch === "deepseek") return head + "走 DeepSeek 官方 API，按人民币计价（尖峰/低谷单价不同）";
   if (ch === "tokenplan") return head + "走阿里云百炼 Token Plan，按 Credits 抵扣：credits/万tok 的数值 = 官方刊例价 元/百万tok（1 credit = 0.01 元刊例价）。北京时间 22:00–08:00 部分模型享官方夜间折扣（qwen3.8 系 4 折 / deepseek-v4 系 5 折），qwen4-max-preview 预览期另有 2 折；plus/flash 系按输入 token 阶梯计价";
   if (ch === "dashscope") return head + "走阿里云百炼按量付费，人民币刊例价计价（DeepSeek 系模型分忙/闲时，忙 08:00–22:00 北京）；与 Token Plan 的 Credits 额度相互独立、不互通";
+  if (ch === "openai") return head + "走 OpenAI 官方 API，按美元刊例价计价（标准档；gpt-5.4 等 >272K 长上下文输入/输出阶梯加价）。金额为刊例价快照，以官方实时页为准，可经覆盖层修正";
+  if (ch === "anthropic") return head + "走 Anthropic 官方 API，按美元刊例价计价（缓存命中按输入价 1 折估）。金额为刊例价快照，以官方实时页为准，可经覆盖层修正";
+  if (ch === "google") return head + "走 Google Gemini API，按美元刊例价计价（Pro 系 >200K 输入阶梯加价）。金额为刊例价快照，以官方实时页为准，可经覆盖层修正";
   if (ch === "other") return head + "不是套餐/DeepSeek 官方这类内置价目渠道，本插件没有该渠道价表 → 只报 token，不报金额（可在覆盖层配 generic 价目）";
   return head + "拿不到 provider 信息（usage.provider_id 为空、/api/models/active 也读不到）→ 只报 token，不报金额。宁可空着，也不按模型名猜一个错数";
 }
@@ -71,6 +77,9 @@ export function costChipHtml(r) {
   }
   if (r.cost != null && r.costUnit === "plan") {
     return '<span class="qp-ts-item qp-ts-cost plan" title="套餐抵扣 ' + escHtml(fmtMoney(r.cost, "")) + ' 额度"><span class="qp-ts-val">▣ ' + fmtMoney(r.cost, "") + '</span></span>';
+  }
+  if (r.cost != null && r.costUnit === "usd") {
+    return '<span class="qp-ts-item qp-ts-cost usd" title="本轮费用（美元刊例价）"><span class="qp-ts-val">' + fmtMoney(r.cost, "$") + '</span></span>';
   }
   if (r.cost != null) {
     return '<span class="qp-ts-item qp-ts-cost cny" title="本轮费用（人民币）"><span class="qp-ts-val">' + fmtMoney(r.cost, "¥") + '</span></span>';

@@ -8,11 +8,12 @@
 
 - **实时速度**：拦截聊天 SSE 流逐片计时，实时 tokens/s；区分"真流式解码"与"网关补发/中途接入回放"，避免峰值虚高。
 - **首字延迟（TTFT）与分项耗时**：首字等待、工具/空闲等待、工具后模型等待、总耗时单列。
-- **分段明细与折线图**：语义分段展示每段速度曲线，峰值与均值一目了然；生成中另有实时速度 sparkline 与燃烧率（credits/min 或 ¥/h）。
+- **分段明细与折线图**：语义分段展示每段速度曲线，峰值与均值一目了然；生成中另有实时速度 sparkline 与燃烧率（credits/min、$/min 或 ¥/h）。
+- **多 provider 通用计价**：内置 OpenAI / Anthropic / Google Gemini 美元刊例价（标准档，含长上下文输入阶梯），按 provider/端点自动识别渠道；美元、人民币、Credits、套餐额度四种货币分桶统计、互不混算。未识别渠道只报 token、不猜金额。
 - **用量与计费**：本轮输出 tokens、费用估算，严格区分前端观测估算（带 ≈）与后端官方用量。
 - **阿里云百炼 Token Plan**：credits 计价（`credits/万tok` 的数值 = 官方刊例价 `元/百万tok`，1 credit = 0.01 元刊例价），含输入 token 阶梯计价、北京 22–08 点官方夜间折扣、`qwen4-max-preview` 预览期折扣、auto 路由参考区间；Credits 三分量分解（输入/缓存/输出）+ 刊例价折算 + 按套餐档位摊销。
-- **百炼按量付费**：人民币刊例价计价，DeepSeek 系模型分忙/闲时（忙 08:00–22:00 北京）。
-- **今日消耗账本**：本地滚动流水聚合今日回合/输出/credits/人民币/额度与 Top3 模型，刷新恢复不重复计账。
+- **百炼按量付费 / DeepSeek 官方**：人民币刊例价计价，DeepSeek 系模型分忙/闲时（忙 08:00–22:00 北京）。
+- **今日消耗账本**：本地滚动流水聚合今日回合/输出/美元/人民币/credits/额度与 Top3 模型，刷新恢复不重复计账。
 - **会话切换恢复**：切换会话后可恢复当前轮统计；页面刷新后能识别"中途接入"的回合。
 - **防御性统计口径**：工具调用参数计入输出、批量冲刷（flush）剔除、静默补发识别、过期纪元流主动 cancel。
 
@@ -59,13 +60,21 @@ npm install        # 安装 esbuild / eslint / prettier / typescript（仅开发
 npm run build      # esbuild 打包 dist/index.js（+ 测试 bundle）
 npm run lint       # ESLint
 npm run typecheck  # tsc checkJs 类型检查
-npm test           # 66 行为回归 + 13 生命周期专项
+npm test           # 73 行为回归 + 13 生命周期专项
 npm run verify     # lint + typecheck + build + 语法校验 + 全部测试
 ```
 
 测试是无头 Node VM 驱动：`test/regression.cjs` 用最小上下文锁定计价/流式/稳定性行为，`test/lifecycle.cjs` 用 DOM mock 覆盖 init 主循环、路由切换、pagehide、双注入守卫、渲染降级、DOM 卫生与面板增量刷新。测试入口（`test/entry.js` / `test/lifecycle-entry.js`）单独打包，**不暴露任何测试钩子到生产 `dist/index.js`**。
 
 ## 计价来源
+
+美元刊例价（标准档快照 2026-11-21，调价时以官方实时页为准，可经覆盖层修正）：
+
+- OpenAI：<https://platform.openai.com/docs/pricing>
+- Anthropic：<https://docs.anthropic.com/en/docs/about-claude/pricing>
+- Google Gemini：<https://ai.google.dev/gemini-api/docs/pricing>
+
+美元金额按 `((输入−缓存)×input + 缓存×cacheHit + 输出×output) / 1e6` 计算，长上下文模型按单次请求输入 token 选阶梯（如 gpt-5.4 >272K、Gemini Pro >200K）。只收录有把握的官方价；未入表模型不显示金额（不猜）。
 
 阿里云百炼官方刊例价（调价时以官方为准）：
 
@@ -95,7 +104,11 @@ localStorage.setItem("qp_token_speed_pricing", JSON.stringify({
   // 4) 百炼 Token Plan 补模型（credits/万tok = 刊例价 元/百万tok；tiers 按输入 token 阶梯）
   tokenplan: { models: [
     { keys: ["my-qwen-fork"], tiers: [{ upTo: Infinity, input: 12, output: 36, cacheHit: 1.5 }], night: 0.4 }
-  ]}
+  ]},
+  // 5) 通用 USD 渠道补模型/调价（美元/百万tok；tiers 按输入 token 阶梯，cacheHit 缺省按输入价估）
+  usd: { openai: { models: [
+    { keys: ["my-gpt-fork"], tiers: [{ upTo: Infinity, input: 2, output: 8, cacheHit: 0.5 }] }
+  ]}}
 }));
 ```
 

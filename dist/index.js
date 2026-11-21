@@ -1,5 +1,5 @@
 /**
- * QwenPaw 插件：Token 实时速度 v2.0.0（前端核心，esbuild 打包）
+ * QwenPaw 插件：Token 实时速度 v2.1.0（前端核心，esbuild 打包）
  * 拦截聊天 SSE 流（POST /api/console/chat），统计 TTFT / 实时速度 / 本轮总量 / 分项耗时 /
  * 费用（套餐额度 / 人民币 / 阿里云百炼 Token Plan Credits）。悬浮条 + 详情面板，fixed 脱离 React 树。
  * 源码在 src/（ESM），请勿手改 dist/index.js。调价改 src/pricing-data.js。版本史见 CHANGELOG.md。
@@ -102,6 +102,58 @@
     generic: { models: [] },
     // —— 自定义渠道映射：resolveChannel 在内置判定后、other 前查这张表
     customChannels: [],
+    // ════════════════════════════════════════════════════════════════════
+    // 通用 USD 渠道（OpenAI / Anthropic / Google Gemini）——标准档刊例价，美元/百万 token。
+    // 快照 2026-11-21，标准（Standard）处理档；非 batch/flex/priority。以官方实时页为准，
+    // 可经覆盖层 usd.<provider>.models 前置修正。未入表模型 → 不显示金额（不猜）。
+    // 来源：platform.openai.com/docs/pricing · docs.anthropic.com/en/docs/about-claude/pricing
+    //       · ai.google.dev/gemini-api/docs/pricing
+    // 结构同 tokenplan：{ keys, exact?, tiers:[{upTo, input, output, cacheHit?}] }，
+    //   tiers 按单次请求输入 token 阶梯（upTo=Infinity 不分阶梯）；cacheHit 缺省按输入价估。
+    // 数组顺序 = 匹配优先级：长名/带后缀排前（避免 "gpt-5" 抢先命中 "gpt-5-mini"）。
+    // ════════════════════════════════════════════════════════════════════
+    usd: {
+      openai: {
+        models: [
+          { keys: ["gpt-5.4"], tiers: [{ upTo: 272e3, input: 2.5, cacheHit: 0.25, output: 15 }, { upTo: Infinity, input: 5, cacheHit: 0.5, output: 22.5 }] },
+          { keys: ["gpt-5.5"], tiers: [{ upTo: Infinity, input: 5, cacheHit: 0.5, output: 30 }] },
+          { keys: ["gpt-5-mini"], tiers: [{ upTo: Infinity, input: 0.25, cacheHit: 0.025, output: 2 }] },
+          { keys: ["gpt-5-nano"], tiers: [{ upTo: Infinity, input: 0.05, cacheHit: 5e-3, output: 0.4 }] },
+          { keys: ["gpt-5-chat"], tiers: [{ upTo: Infinity, input: 1.25, cacheHit: 0.125, output: 10 }] },
+          { keys: ["gpt-5"], tiers: [{ upTo: Infinity, input: 1.25, cacheHit: 0.125, output: 10 }] },
+          { keys: ["gpt-4.1-mini"], tiers: [{ upTo: Infinity, input: 0.4, cacheHit: 0.1, output: 1.6 }] },
+          { keys: ["gpt-4.1-nano"], tiers: [{ upTo: Infinity, input: 0.1, cacheHit: 0.025, output: 0.4 }] },
+          { keys: ["gpt-4.1"], tiers: [{ upTo: Infinity, input: 2, cacheHit: 0.5, output: 8 }] },
+          { keys: ["gpt-4o-mini"], tiers: [{ upTo: Infinity, input: 0.15, cacheHit: 0.075, output: 0.6 }] },
+          { keys: ["gpt-4o"], tiers: [{ upTo: Infinity, input: 2.5, cacheHit: 1.25, output: 10 }] },
+          { keys: ["o4-mini"], tiers: [{ upTo: Infinity, input: 1.1, cacheHit: 0.275, output: 4.4 }] },
+          { keys: ["o3-mini"], tiers: [{ upTo: Infinity, input: 1.1, cacheHit: 0.55, output: 4.4 }] },
+          { keys: ["o3"], tiers: [{ upTo: Infinity, input: 2, cacheHit: 0.5, output: 8 }] },
+          { keys: ["o1-mini"], tiers: [{ upTo: Infinity, input: 1.1, cacheHit: 0.55, output: 4.4 }] },
+          { keys: ["o1"], tiers: [{ upTo: Infinity, input: 15, cacheHit: 7.5, output: 60 }] }
+        ]
+      },
+      anthropic: {
+        models: [
+          { keys: ["opus-4-5", "opus-4.5", "opus-4-6", "opus-4.6", "opus-5"], tiers: [{ upTo: Infinity, input: 5, cacheHit: 0.5, output: 25 }] },
+          { keys: ["opus-4-1", "opus-4.1"], tiers: [{ upTo: Infinity, input: 15, cacheHit: 1.5, output: 75 }] },
+          { keys: ["opus"], tiers: [{ upTo: Infinity, input: 15, cacheHit: 1.5, output: 75 }] },
+          { keys: ["sonnet"], tiers: [{ upTo: Infinity, input: 3, cacheHit: 0.3, output: 15 }] },
+          { keys: ["haiku-5-5", "haiku-5.5"], tiers: [{ upTo: 1e5, input: 0.1, cacheHit: 0.01, output: 0.5 }, { upTo: Infinity, input: 0.5, cacheHit: 0.05, output: 2.5 }] },
+          { keys: ["haiku-4-5", "haiku-4.5"], tiers: [{ upTo: Infinity, input: 1, cacheHit: 0.1, output: 5 }] },
+          { keys: ["haiku-3-5", "haiku-3.5"], tiers: [{ upTo: Infinity, input: 0.8, cacheHit: 0.08, output: 4 }] },
+          { keys: ["haiku"], tiers: [{ upTo: Infinity, input: 0.25, cacheHit: 0.03, output: 1.25 }] }
+        ]
+      },
+      google: {
+        models: [
+          { keys: ["gemini-2.5-flash-lite"], tiers: [{ upTo: Infinity, input: 0.1, cacheHit: 0.01, output: 0.4 }] },
+          { keys: ["gemini-2.5-flash"], tiers: [{ upTo: Infinity, input: 0.3, cacheHit: 0.03, output: 2.5 }] },
+          { keys: ["gemini-2.5-pro"], tiers: [{ upTo: 2e5, input: 1.25, cacheHit: 0.125, output: 10 }, { upTo: Infinity, input: 2.5, cacheHit: 0.25, output: 15 }] },
+          { keys: ["gemini-3.1-pro", "gemini-3-pro-preview"], tiers: [{ upTo: 2e5, input: 2, cacheHit: 0.2, output: 12 }, { upTo: Infinity, input: 4, cacheHit: 0.4, output: 18 }] }
+        ]
+      }
+    },
     // ════════════════════════════════════════════════════════════════════
     // 阿里云百炼 Token Plan（credits）与百炼按量（dashscope，人民币）
     //
@@ -216,6 +268,11 @@
       if (u.generic && entryArr(u.generic.models)) PRICING.generic.models = u.generic.models;
       if (entryArr(u.customChannels)) PRICING.customChannels = u.customChannels;
       if (u.tokenplan && tpArr(u.tokenplan.models)) PRICING.tokenplan.models = u.tokenplan.models.concat(PRICING.tokenplan.models);
+      if (u.usd && typeof u.usd === "object") {
+        ["openai", "anthropic", "google"].forEach(function(prov) {
+          if (u.usd[prov] && tpArr(u.usd[prov].models)) PRICING.usd[prov].models = u.usd[prov].models.concat(PRICING.usd[prov].models);
+        });
+      }
     } catch (e) {
       console.warn("[token-speed] pricing \u8986\u76D6\u5C42\u5E94\u7528\u5931\u8D25\uFF0C\u4F7F\u7528\u5185\u7F6E\u4EF7\u76EE", e);
     }
@@ -344,6 +401,32 @@
     }
     return null;
   }
+  var USD_CHANNELS = ["openai", "anthropic", "google"];
+  function isUsdChannel(ch) {
+    return USD_CHANNELS.indexOf(String(ch || "")) >= 0;
+  }
+  function usdEntryFor(channel, model) {
+    var reg = PRICING.usd && PRICING.usd[channel];
+    if (!reg || !reg.models) return null;
+    var m = String(model || "").toLowerCase();
+    for (var i = 0; i < reg.models.length; i++) {
+      var ks = reg.models[i].keys || [];
+      for (var j = 0; j < ks.length; j++) {
+        if (!ks[j]) continue;
+        if (reg.models[i].exact ? m === String(ks[j]).toLowerCase() : m.indexOf(String(ks[j]).toLowerCase()) >= 0) return reg.models[i];
+      }
+    }
+    return null;
+  }
+  function calcUsd(channel, model, promptTok, completionTok, cacheHitTok) {
+    var entry = usdEntryFor(channel, model);
+    if (!entry) return null;
+    var pt = promptTok || 0, ct = completionTok || 0;
+    var hit = Math.max(0, Math.min(cacheHitTok || 0, pt));
+    var tier = tpTier(entry, pt).tier;
+    var cacheRate = tier.cacheHit != null ? tier.cacheHit : tier.input;
+    return ((pt - hit) * tier.input + hit * cacheRate + ct * tier.output) / 1e6;
+  }
   function beijingHour(t) {
     return new Date((t == null ? Date.now() : t) + 8 * 3600 * 1e3).getUTCHours();
   }
@@ -447,6 +530,7 @@
       return tp ? tp.credits : null;
     }
     if (ch === "dashscope") return calcDashscope(model, promptTok, completionTok, cacheHitTok);
+    if (isUsdChannel(ch)) return calcUsd(ch, model, promptTok, completionTok, cacheHitTok);
     var pt = promptTok || 0, ct = completionTok || 0;
     var t = ch === "deepseek" ? priceTableFor(model) : (genericEntryFor(ch, model) || {}).table;
     if (t && t.offPeak && t.offPeak.input != null && t.offPeak.output != null) {
@@ -464,6 +548,7 @@
     if (ch === "afp") ch = "plan";
     if (!ch || ch === "plan") return "";
     if (ch === "deepseek" || ch === "dashscope") return "cny";
+    if (isUsdChannel(ch)) return "usd";
     if (ch === "tokenplan") return "credits";
     var e = genericEntryFor(ch, model);
     return e && e.coef != null ? "plan" : "cny";
@@ -473,6 +558,7 @@
     if (c === "afp") c = "plan";
     if (!c) return false;
     if (c === "deepseek" || c === "tokenplan" || c === "dashscope") return true;
+    if (isUsdChannel(c)) return true;
     if (c === "plan") return false;
     var g = PRICING.generic && PRICING.generic.models || [];
     for (var i = 0; i < g.length; i++) {
@@ -874,6 +960,9 @@
     if (pid === "deepseek" || pid.indexOf("deepseek") >= 0 || bu.indexOf("deepseek.com") >= 0) return "deepseek";
     if (bu.indexOf("coding.dashscope") >= 0) return "coding";
     if (bu.indexOf("dashscope.aliyuncs.com") >= 0 || /dashscope|bailian/.test(pid)) return "dashscope";
+    if (bu.indexOf("api.openai.com") >= 0 || pid.indexOf("openai") >= 0) return "openai";
+    if (bu.indexOf("api.anthropic.com") >= 0 || pid.indexOf("anthropic") >= 0) return "anthropic";
+    if (bu.indexOf("generativelanguage.googleapis.com") >= 0 || pid.indexOf("gemini") >= 0) return "google";
     var _cc = customChannelOf(pid, bu);
     if (_cc) return _cc;
     if (pid) return "other";
@@ -1153,6 +1242,7 @@
       out: r.outputTokens || 0,
       credits: r.costUnit === "credits" ? r.cost : null,
       cny: r.costUnit === "cny" ? r.cost : null,
+      usd: r.costUnit === "usd" ? r.cost : null,
       plan: r.afp != null ? r.afp : null
     };
   }
@@ -1179,7 +1269,7 @@
     d.setHours(0, 0, 0, 0);
     var start = d.getTime();
     var a = loadLedger();
-    var sum = { turns: 0, out: 0, credits: 0, cny: 0, plan: 0, byModel: {} };
+    var sum = { turns: 0, out: 0, credits: 0, cny: 0, usd: 0, plan: 0, byModel: {} };
     for (var i = 0; i < a.length; i++) {
       var e = a[i];
       if (!e || (e.ts || 0) < start) continue;
@@ -1187,13 +1277,15 @@
       sum.out += e.out || 0;
       if (e.credits != null) sum.credits += e.credits;
       if (e.cny != null) sum.cny += e.cny;
+      if (e.usd != null) sum.usd += e.usd;
       if (e.plan != null) sum.plan += e.plan;
       var mk = e.model || "\u672A\u77E5";
-      var bm = sum.byModel[mk] || (sum.byModel[mk] = { turns: 0, out: 0, credits: 0, cny: 0, plan: 0 });
+      var bm = sum.byModel[mk] || (sum.byModel[mk] = { turns: 0, out: 0, credits: 0, cny: 0, usd: 0, plan: 0 });
       bm.turns++;
       bm.out += e.out || 0;
       if (e.credits != null) bm.credits += e.credits;
       if (e.cny != null) bm.cny += e.cny;
+      if (e.usd != null) bm.usd += e.usd;
       if (e.plan != null) bm.plan += e.plan;
     }
     return sum;
@@ -1216,6 +1308,12 @@
       var tier = tpTier(e, promptTok || 0).tier;
       var f = tpFactor(e, Date.now()).factor;
       return { value: speed * tier.output / 1e4 * 60 * f, unit: "credits/min" };
+    }
+    if (isUsdChannel(ch)) {
+      var ue = usdEntryFor(ch, model);
+      if (!ue) return null;
+      var ut = tpTier(ue, promptTok || 0).tier;
+      return { value: speed * ut.output / 1e6 * 60, unit: "usd/min" };
     }
     var outPrice = null;
     if (ch === "deepseek") {
@@ -2613,6 +2711,9 @@
     if (ch === "deepseek") return "DeepSeek \u5B98\u65B9";
     if (ch === "tokenplan") return "\u767E\u70BC Token Plan";
     if (ch === "dashscope") return "\u767E\u70BC\u6309\u91CF";
+    if (ch === "openai") return "OpenAI";
+    if (ch === "anthropic") return "Anthropic";
+    if (ch === "google") return "Google Gemini";
     if (ch === "other") return "\u5176\u4ED6\u6E20\u9053";
     return "\u672A\u8BC6\u522B";
   }
@@ -2623,6 +2724,9 @@
     if (ch === "deepseek") return head + "\u8D70 DeepSeek \u5B98\u65B9 API\uFF0C\u6309\u4EBA\u6C11\u5E01\u8BA1\u4EF7\uFF08\u5C16\u5CF0/\u4F4E\u8C37\u5355\u4EF7\u4E0D\u540C\uFF09";
     if (ch === "tokenplan") return head + "\u8D70\u963F\u91CC\u4E91\u767E\u70BC Token Plan\uFF0C\u6309 Credits \u62B5\u6263\uFF1Acredits/\u4E07tok \u7684\u6570\u503C = \u5B98\u65B9\u520A\u4F8B\u4EF7 \u5143/\u767E\u4E07tok\uFF081 credit = 0.01 \u5143\u520A\u4F8B\u4EF7\uFF09\u3002\u5317\u4EAC\u65F6\u95F4 22:00\u201308:00 \u90E8\u5206\u6A21\u578B\u4EAB\u5B98\u65B9\u591C\u95F4\u6298\u6263\uFF08qwen3.8 \u7CFB 4 \u6298 / deepseek-v4 \u7CFB 5 \u6298\uFF09\uFF0Cqwen4-max-preview \u9884\u89C8\u671F\u53E6\u6709 2 \u6298\uFF1Bplus/flash \u7CFB\u6309\u8F93\u5165 token \u9636\u68AF\u8BA1\u4EF7";
     if (ch === "dashscope") return head + "\u8D70\u963F\u91CC\u4E91\u767E\u70BC\u6309\u91CF\u4ED8\u8D39\uFF0C\u4EBA\u6C11\u5E01\u520A\u4F8B\u4EF7\u8BA1\u4EF7\uFF08DeepSeek \u7CFB\u6A21\u578B\u5206\u5FD9/\u95F2\u65F6\uFF0C\u5FD9 08:00\u201322:00 \u5317\u4EAC\uFF09\uFF1B\u4E0E Token Plan \u7684 Credits \u989D\u5EA6\u76F8\u4E92\u72EC\u7ACB\u3001\u4E0D\u4E92\u901A";
+    if (ch === "openai") return head + "\u8D70 OpenAI \u5B98\u65B9 API\uFF0C\u6309\u7F8E\u5143\u520A\u4F8B\u4EF7\u8BA1\u4EF7\uFF08\u6807\u51C6\u6863\uFF1Bgpt-5.4 \u7B49 >272K \u957F\u4E0A\u4E0B\u6587\u8F93\u5165/\u8F93\u51FA\u9636\u68AF\u52A0\u4EF7\uFF09\u3002\u91D1\u989D\u4E3A\u520A\u4F8B\u4EF7\u5FEB\u7167\uFF0C\u4EE5\u5B98\u65B9\u5B9E\u65F6\u9875\u4E3A\u51C6\uFF0C\u53EF\u7ECF\u8986\u76D6\u5C42\u4FEE\u6B63";
+    if (ch === "anthropic") return head + "\u8D70 Anthropic \u5B98\u65B9 API\uFF0C\u6309\u7F8E\u5143\u520A\u4F8B\u4EF7\u8BA1\u4EF7\uFF08\u7F13\u5B58\u547D\u4E2D\u6309\u8F93\u5165\u4EF7 1 \u6298\u4F30\uFF09\u3002\u91D1\u989D\u4E3A\u520A\u4F8B\u4EF7\u5FEB\u7167\uFF0C\u4EE5\u5B98\u65B9\u5B9E\u65F6\u9875\u4E3A\u51C6\uFF0C\u53EF\u7ECF\u8986\u76D6\u5C42\u4FEE\u6B63";
+    if (ch === "google") return head + "\u8D70 Google Gemini API\uFF0C\u6309\u7F8E\u5143\u520A\u4F8B\u4EF7\u8BA1\u4EF7\uFF08Pro \u7CFB >200K \u8F93\u5165\u9636\u68AF\u52A0\u4EF7\uFF09\u3002\u91D1\u989D\u4E3A\u520A\u4F8B\u4EF7\u5FEB\u7167\uFF0C\u4EE5\u5B98\u65B9\u5B9E\u65F6\u9875\u4E3A\u51C6\uFF0C\u53EF\u7ECF\u8986\u76D6\u5C42\u4FEE\u6B63";
     if (ch === "other") return head + "\u4E0D\u662F\u5957\u9910/DeepSeek \u5B98\u65B9\u8FD9\u7C7B\u5185\u7F6E\u4EF7\u76EE\u6E20\u9053\uFF0C\u672C\u63D2\u4EF6\u6CA1\u6709\u8BE5\u6E20\u9053\u4EF7\u8868 \u2192 \u53EA\u62A5 token\uFF0C\u4E0D\u62A5\u91D1\u989D\uFF08\u53EF\u5728\u8986\u76D6\u5C42\u914D generic \u4EF7\u76EE\uFF09";
     return head + "\u62FF\u4E0D\u5230 provider \u4FE1\u606F\uFF08usage.provider_id \u4E3A\u7A7A\u3001/api/models/active \u4E5F\u8BFB\u4E0D\u5230\uFF09\u2192 \u53EA\u62A5 token\uFF0C\u4E0D\u62A5\u91D1\u989D\u3002\u5B81\u53EF\u7A7A\u7740\uFF0C\u4E5F\u4E0D\u6309\u6A21\u578B\u540D\u731C\u4E00\u4E2A\u9519\u6570";
   }
@@ -2654,6 +2758,9 @@
     }
     if (r.cost != null && r.costUnit === "plan") {
       return '<span class="qp-ts-item qp-ts-cost plan" title="\u5957\u9910\u62B5\u6263 ' + escHtml(fmtMoney(r.cost, "")) + ' \u989D\u5EA6"><span class="qp-ts-val">\u25A3 ' + fmtMoney(r.cost, "") + "</span></span>";
+    }
+    if (r.cost != null && r.costUnit === "usd") {
+      return '<span class="qp-ts-item qp-ts-cost usd" title="\u672C\u8F6E\u8D39\u7528\uFF08\u7F8E\u5143\u520A\u4F8B\u4EF7\uFF09"><span class="qp-ts-val">' + fmtMoney(r.cost, "$") + "</span></span>";
     }
     if (r.cost != null) {
       return '<span class="qp-ts-item qp-ts-cost cny" title="\u672C\u8F6E\u8D39\u7528\uFF08\u4EBA\u6C11\u5E01\uFF09"><span class="qp-ts-val">' + fmtMoney(r.cost, "\xA5") + "</span></span>";
@@ -2806,6 +2913,10 @@
       label = "\u5957\u9910\u62B5\u6263";
       num = fmtMoney(r.cost, "") + "<small>\u989D\u5EA6</small>";
       cap = escHtml(channelLabel(r.channel));
+    } else if (r.cost != null && r.costUnit === "usd") {
+      label = "\u672C\u8F6E\u8D39\u7528";
+      num = fmtMoney(r.cost, "$");
+      cap = escHtml(channelLabel(r.channel)) + " \xB7 \u7F8E\u5143\u520A\u4F8B\u4EF7";
     } else if (r.cost != null) {
       label = "\u672C\u8F6E\u8D39\u7528";
       num = fmtMoney(r.cost, "\xA5");
@@ -2860,6 +2971,7 @@
     var parts = ["<span>" + s.turns + " \u56DE\u5408</span>", "<span>\u8F93\u51FA " + fmtNum(s.out) + " tok</span>"];
     if (s.credits > 0) parts.push('<span class="qp-lg-cr">\u25C8 ' + fmtCredits(s.credits) + " credits</span>");
     if (s.cny > 0) parts.push('<span class="qp-lg-cny">' + fmtMoney(s.cny, "\xA5") + "</span>");
+    if (s.usd > 0) parts.push('<span class="qp-lg-usd">' + fmtMoney(s.usd, "$") + "</span>");
     if (s.plan > 0) parts.push('<span class="qp-lg-plan">\u25A3 ' + fmtPlan(s.plan) + " \u989D\u5EA6</span>");
     var tierSel = "";
     if (s.credits > 0) {
@@ -2899,7 +3011,7 @@
     if (!running && r.status !== DONE) note += '<div class="qp-d-note">' + escHtml(r.errMsg || info.tip) + "</div>";
     var usage = row("\u8F93\u5165\u7528\u91CF", r.promptTokens != null ? fmtNum(r.promptTokens) + " tok" : "\u2014", "\u540E\u7AEF\u8BB0\u5F55\u7684\u672C\u8F6E\u7D2F\u8BA1\u8F93\u5165\u7528\u91CF\uFF0C\u53EF\u80FD\u5305\u542B\u591A\u6B21\u5DE5\u5177\u7EED\u8F6E") + row("\u8F93\u5165 + \u8F93\u51FA", r.total ? fmtNum(r.total) + " tok" : "\u2014", "\u540E\u7AEF\u672C\u8F6E\u7D2F\u8BA1\u603B\u7528\u91CF\uFF0C\u4E0D\u7B49\u4E8E\u65B0\u589E\u8F93\u51FA\u91CF") + row("\u5DE5\u5177\u53C2\u6570 \xB7 \u542B\u5728\u8F93\u51FA\u5185", r.toolTokens > 0 ? "\u2248" + fmtNum(r.toolTokens) + " tok" : "\u2014", "\u5DE5\u5177\u53C2\u6570\u662F\u8F93\u51FA\u7684\u4E00\u90E8\u5206\uFF1B\u62C6\u5206\u91CF\u4E3A\u6821\u51C6\u540E\u7684\u4F30\u7B97\uFF0C\u4E0D\u4E0E\u8F93\u51FA\u603B\u91CF\u91CD\u590D\u76F8\u52A0") + row("\u7F13\u5B58\u547D\u4E2D \xB7 \u542B\u5728\u8F93\u5165\u5185", r.cacheHit > 0 ? fmtNum(r.cacheHit) + " tok" : "\u2014");
     if (r.afp != null && r.afp > 0) usage += row("\u5957\u9910\u62B5\u6263", fmtPlan(r.afp) + " \u989D\u5EA6", channelTip(r.channel, r.provider)) + row("\u5176\u4E2D\u7F13\u5B58\u91CD\u8BA1", rebillNote(r.channel, r.cacheHit, r.model).replace(/[（）]/g, "").replace("\u7F13\u5B58\u91CD\u8BA1 ", "") || "\u2014");
-    if (r.cost != null) usage += r.costUnit === "plan" ? row("\u5957\u9910\u62B5\u6263", fmtMoney(r.cost, "") + " \u989D\u5EA6", channelTip(r.channel, r.provider)) : r.costUnit === "credits" ? row("Credits \u6D88\u8017", fmtCredits(r.cost) + " credits", channelTip(r.channel, r.provider)) : row("\u8D39\u7528", fmtMoney(r.cost, "\xA5"), channelTip(r.channel, r.provider));
+    if (r.cost != null) usage += r.costUnit === "plan" ? row("\u5957\u9910\u62B5\u6263", fmtMoney(r.cost, "") + " \u989D\u5EA6", channelTip(r.channel, r.provider)) : r.costUnit === "credits" ? row("Credits \u6D88\u8017", fmtCredits(r.cost) + " credits", channelTip(r.channel, r.provider)) : r.costUnit === "usd" ? row("\u8D39\u7528", fmtMoney(r.cost, "$"), channelTip(r.channel, r.provider)) : row("\u8D39\u7528", fmtMoney(r.cost, "\xA5"), channelTip(r.channel, r.provider));
     if (r.coefRange && r.afpLo != null) usage += row("\u5957\u9910\u62B5\u6263 \xB7 \u53C2\u8003", fmtPlanRange({ lo: r.afpLo, hi: r.afpHi }), ALIAS_TIP);
     if (r.tpRange && r.tpLo != null) usage += row("Credits \xB7 \u53C2\u8003", fmtCredits(r.tpLo) + "~" + fmtCredits(r.tpHi) + " credits", "auto \u667A\u80FD\u8DEF\u7531\u5E95\u5C42\u6A21\u578B\u4E0D\u5B9A\uFF0C\u6309\u5168\u8868\u5F53\u524D\u65F6\u523B\u7ED9\u53C2\u8003\u533A\u95F4");
     if (r.coefMissing || r.priceMissing || !r.channel) usage += row("\u8BA1\u8D39", r.coefMissing ? "\u7CFB\u6570\u672A\u77E5" : r.priceMissing ? "\u65E0\u4EF7\u8868" : "\u6E20\u9053\u672A\u8BC6\u522B", channelTip(r.channel, r.provider));
@@ -2907,7 +3019,7 @@
     var speedNote = r.historyOnly ? "\u5386\u53F2\u4EC5\u6062\u590D\u7528\u91CF\uFF0C\u672A\u89C2\u6D4B\u751F\u6210\u901F\u5EA6" : r.attached ? "\u4EC5\u7EDF\u8BA1\u63A5\u5165\u540E\u6709\u6548\u751F\u6210\uFF0C\u56DE\u653E\u4E0D\u8BA1\u901F" : "\u6392\u9664\u9996\u5B57\u3001\u5DE5\u5177\u7B49\u5F85\u53CA\u7F13\u51B2\u51B2\u5237";
     var burnHtml = "";
     if (running && r.burnRate && r.burnRate.value > 0) {
-      burnHtml = '<div class="qp-d-burn">\u71C3\u70E7\u7387 \u2248' + (r.burnRate.unit === "credits/min" ? fmtCredits(r.burnRate.value) + " credits/min" : fmtMoney(r.burnRate.value, "\xA5") + "/h") + "</div>";
+      burnHtml = '<div class="qp-d-burn">\u71C3\u70E7\u7387 \u2248' + (r.burnRate.unit === "credits/min" ? fmtCredits(r.burnRate.value) + " credits/min" : r.burnRate.unit === "usd/min" ? fmtMoney(r.burnRate.value, "$") + "/min" : fmtMoney(r.burnRate.value, "\xA5") + "/h") + "</div>";
     }
     var sparkHtml = running ? buildSparkline(r.speedHist) : "";
     var html = '<div class="qp-d-title"><div><div class="qp-d-eyebrow">TOKEN SPEED</div><div class="qp-d-heading" id="qp-d-heading">\u672C\u8F6E\u751F\u6210\u6982\u89C8</div><div class="qp-d-meta">' + escHtml(r.model || "\u672A\u77E5\u6A21\u578B") + (r.aliasModel ? " \xB7 Auto" : "") + " \xB7 " + channelLabel(r.channel) + (fmtAge(r) ? " \xB7 " + fmtAge(r) : "") + '</div></div><div class="qp-d-tools"><span class="qp-d-badge ' + escHtml(r.status) + '" title="' + escHtml(info.tip) + '">' + info.text + '</span><button type="button" class="qp-d-close" id="qp-d-close" aria-label="\u5173\u95ED\u751F\u6210\u8BE6\u60C5">\xD7</button></div></div>' + note + '<div class="qp-d-hero"><div class="qp-d-card speed"><div class="qp-d-label">' + (running ? "\u5B9E\u65F6\u751F\u6210\u901F\u5EA6" : "\u6709\u6548\u751F\u6210\u901F\u5EA6") + '<span class="qp-d-tag">' + (r.historyOnly ? "\u672A\u89C2\u6D4B" : "\u89C2\u6D4B\u4F30\u7B97") + '</span></div><div class="qp-d-number">' + (observed ? fmtSpeed(speed) : "\u2014") + "<small>tok/s</small></div>" + sparkHtml + '<div class="qp-d-caption">' + speedNote + "</div>" + burnHtml + '</div><div class="qp-d-card"><div class="qp-d-label">\u672C\u8F6E\u8F93\u51FA<span class="qp-d-tag">' + (estimated ? "\u4F30\u7B97" : "\u540E\u7AEF\u7528\u91CF") + '</span></div><div class="qp-d-number" title="' + Math.round(total).toLocaleString("zh-CN") + ' tok">' + (estimated ? "\u2248" : "") + fmtNum(total) + '<small>tok</small></div><div class="qp-d-caption">\u542B\u6B63\u6587\u3001\u601D\u8003\u4E0E\u5DE5\u5177\u53C2\u6570</div></div>' + billingCardHtml(r) + '</div><div class="qp-d-timings">' + time("\u9996\u5B57\u7B49\u5F85", r.attached || r.historyOnly ? "\u2014" : fmtMs(r.ttft), "\u4ECE\u63D0\u4EA4\u8BF7\u6C42\u5230\u9996\u4E2A\u8F93\u51FA\u5230\u8FBE") + time("\u5DE5\u5177 / \u7A7A\u95F2\u7B49\u5F85", waitValue(r.pauseSec), "\u5DF2\u89C2\u6D4B\u5DE5\u5177\u6267\u884C\u4E0E\u6BB5\u95F4\u7A7A\u95F2\u7B49\u5F85") + time("\u5DE5\u5177\u540E\u6A21\u578B\u7B49\u5F85", waitValue(r.modelWaitSec), "\u5DE5\u5177\u7ED3\u675F\u5230\u4E0B\u4E00\u6B21\u6B63\u6587\u6216\u601D\u8003\u5230\u8FBE\uFF0C\u5355\u5217\u8BB0\u5F55") + time(r.originKnown === false ? "\u63A5\u5165\u540E\u89C2\u5BDF" : "\u603B\u8017\u65F6", r.secondsKnown === false || r.seconds == null ? "\u2014" : fmtSec(r.seconds), "\u4ECE\u8BF7\u6C42\u5F00\u59CB\u5230\u7ED3\u675F\uFF1B\u4E2D\u9014\u63A5\u5165\u65F6\u4E3A\u5DF2\u89C2\u6D4B\u65F6\u957F") + '</div><div class="qp-d-section">\u7528\u91CF\u4E0E\u8BA1\u8D39<small>\u62C6\u5206\u9879\u5DF2\u5305\u542B\u5728\u603B\u91CF\u5185</small></div><div class="qp-d-usage">' + usage + "</div>" + tpBreakdownHtml(r) + ledgerHtml() + '<div class="qp-d-explain">' + (estimated ? "\u2248 \u8868\u793A\u4F30\u7B97\u3002\u8F93\u51FA\u603B\u91CF\u5728\u540E\u7AEF\u7528\u91CF\u5230\u8FBE\u540E\u6821\u51C6\uFF1B\u901F\u5EA6\u4E0E\u8F93\u51FA\u62C6\u5206\u4ECD\u4E3A\u89C2\u6D4B\u4F30\u7B97\u3002" : "\u8F93\u51FA\u603B\u91CF\u53D6\u540E\u7AEF\u7528\u91CF\uFF1B\u5E26 \u2248 \u7684\u901F\u5EA6\u4E0E\u62C6\u5206\u9879\u4E3A\u89C2\u6D4B\u4F30\u7B97\u3002") + "</div>";
@@ -3377,7 +3489,7 @@
     "use strict";
     if (window.__qpTokenSpeedLoaded) return;
     window.__qpTokenSpeedLoaded = true;
-    window.__qpTokenSpeedVersion = "2.0.0";
+    window.__qpTokenSpeedVersion = "2.1.0";
     if (typeof window !== "undefined") patchFetch();
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", init);

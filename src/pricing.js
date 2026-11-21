@@ -139,6 +139,35 @@ export function genericEntryFor(channel, model) {
 }
 
 // ════════════════════════════════════════════════════════════
+// 通用 USD 渠道计价（OpenAI / Anthropic / Google）：美元刊例价，复用 tiers 阶梯
+// ════════════════════════════════════════════════════════════
+export var USD_CHANNELS = ["openai", "anthropic", "google"];
+export function isUsdChannel(ch) { return USD_CHANNELS.indexOf(String(ch || "")) >= 0; }
+export function usdEntryFor(channel, model) {
+  var reg = PRICING.usd && PRICING.usd[channel];
+  if (!reg || !reg.models) return null;
+  var m = String(model || "").toLowerCase();
+  for (var i = 0; i < reg.models.length; i++) {
+    var ks = reg.models[i].keys || [];
+    for (var j = 0; j < ks.length; j++) {
+      if (!ks[j]) continue;
+      if (reg.models[i].exact ? m === String(ks[j]).toLowerCase() : m.indexOf(String(ks[j]).toLowerCase()) >= 0) return reg.models[i];
+    }
+  }
+  return null;
+}
+// 美元金额：((输入-缓存)×input + 缓存×cacheHit + 输出×output) / 1e6，按输入 token 选阶梯
+export function calcUsd(channel, model, promptTok, completionTok, cacheHitTok) {
+  var entry = usdEntryFor(channel, model);
+  if (!entry) return null;
+  var pt = promptTok || 0, ct = completionTok || 0;
+  var hit = Math.max(0, Math.min(cacheHitTok || 0, pt));
+  var tier = tpTier(entry, pt).tier;
+  var cacheRate = tier.cacheHit != null ? tier.cacheHit : tier.input;
+  return ((pt - hit) * tier.input + hit * cacheRate + ct * tier.output) / 1e6;
+}
+
+// ════════════════════════════════════════════════════════════
 // Token Plan credits 计价引擎
 // ════════════════════════════════════════════════════════════
 // 北京时间小时（UTC+8 换算，与本机时区无关——用户在哪都按官方北京时段判）
@@ -251,6 +280,7 @@ export function calcCost(channel, model, promptTok, completionTok, cacheHitTok) 
     return tp ? tp.credits : null;
   }
   if (ch === "dashscope") return calcDashscope(model, promptTok, completionTok, cacheHitTok);
+  if (isUsdChannel(ch)) return calcUsd(ch, model, promptTok, completionTok, cacheHitTok);
   var pt = promptTok || 0, ct = completionTok || 0;
   var t = ch === "deepseek" ? priceTableFor(model) : (genericEntryFor(ch, model) || {}).table;
   if (t && t.offPeak && t.offPeak.input != null && t.offPeak.output != null) {
@@ -270,6 +300,7 @@ export function costUnitFor(channel, model) {
   if (ch === "afp") ch = "plan";
   if (!ch || ch === "plan") return "";
   if (ch === "deepseek" || ch === "dashscope") return "cny";
+  if (isUsdChannel(ch)) return "usd";
   if (ch === "tokenplan") return "credits";
   var e = genericEntryFor(ch, model);
   return e && e.coef != null ? "plan" : "cny";
@@ -281,6 +312,7 @@ export function channelHasPriceTable(ch) {
   if (c === "afp") c = "plan";
   if (!c) return false;
   if (c === "deepseek" || c === "tokenplan" || c === "dashscope") return true;
+  if (isUsdChannel(c)) return true;
   if (c === "plan") return false; // 套餐渠道走 coefMissing 提示，不算"无价表"
   var g = (PRICING.generic && PRICING.generic.models) || [];
   for (var i = 0; i < g.length; i++) {

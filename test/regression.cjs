@@ -549,6 +549,81 @@ test('UI 语义：今日账本进面板，credits 存在时才有档位摊销选
   assert.ok(html2.includes('今日消耗'));
   assert.ok(!html2.includes('qp-tp-tier') && !html2.includes('¥'));
 });
+test('USD 渠道识别：只认 provider/端点证据；Vertex 不误判；第三方转售不靠模型名猜', () => {
+  const a = harness().a;
+  assert.equal(a.resolveChannel('openai', 'https://api.openai.com/v1'), 'openai');
+  assert.equal(a.resolveChannel('', 'https://api.openai.com/v1'), 'openai'); // 纯端点证据
+  assert.equal(a.resolveChannel('anthropic', 'https://api.anthropic.com'), 'anthropic');
+  assert.equal(a.resolveChannel('gemini', 'https://generativelanguage.googleapis.com/v1beta'), 'google');
+  assert.equal(a.resolveChannel('google-vertex', 'https://aiplatform.googleapis.com'), 'other'); // Vertex 价不同，不套 Gemini 标准价
+  assert.equal(a.resolveChannel('some-reseller', 'https://api.example.com'), 'other'); // 卖 gpt 也不靠名字猜成 openai
+  assert.equal(a.resolveChannel('bailian-tokenplan', 'https://token-plan.cn-beijing.maas.aliyuncs.com'), 'tokenplan'); // 阿里门控不被抢
+  assert.equal(a.costUnitFor('openai', 'gpt-4o'), 'usd');
+  assert.equal(a.channelHasPriceTable('anthropic'), true);
+});
+test('USD 计价 golden：OpenAI/Anthropic/Google 标准档三分量（美元/百万tok）', () => {
+  const a = harness().a; const near = (x, y) => assert.ok(Math.abs(x - y) < 1e-9, x + ' != ' + y);
+  near(a.calcUsd('openai', 'gpt-4o', 1000, 200, 0), (1000 * 2.5 + 200 * 10) / 1e6);
+  near(a.calcUsd('openai', 'gpt-4o', 1000, 200, 500), (500 * 2.5 + 500 * 1.25 + 200 * 10) / 1e6); // 缓存命中按 cacheHit
+  near(a.calcUsd('openai', 'gpt-5-mini', 1000, 200, 0), (1000 * 0.25 + 200 * 2) / 1e6); // 长名优先，不被 gpt-5 抢
+  near(a.calcUsd('anthropic', 'claude-sonnet-4-5', 1000, 200, 0), (1000 * 3 + 200 * 15) / 1e6);
+  near(a.calcUsd('anthropic', 'claude-opus-4-5', 1000, 200, 0), (1000 * 5 + 200 * 25) / 1e6);
+  near(a.calcUsd('anthropic', 'claude-3-opus', 1000, 200, 0), (1000 * 15 + 200 * 75) / 1e6); // 泛 opus 兜底
+  near(a.calcUsd('google', 'gemini-2.5-flash', 1000, 200, 0), (1000 * 0.3 + 200 * 2.5) / 1e6);
+  near(a.calcUsd('google', 'gemini-2.5-pro', 1000, 200, 0), (1000 * 1.25 + 200 * 10) / 1e6);
+});
+test('USD 长上下文阶梯：gpt-5.4 >272K、gemini-2.5-pro >200K 跳档', () => {
+  const a = harness().a; const near = (x, y) => assert.ok(Math.abs(x - y) < 1e-9, x + ' != ' + y);
+  near(a.calcUsd('openai', 'gpt-5.4', 272000, 0, 0), 272000 * 2.5 / 1e6);
+  near(a.calcUsd('openai', 'gpt-5.4', 272001, 0, 0), 272001 * 5 / 1e6);
+  near(a.calcUsd('google', 'gemini-2.5-pro', 200000, 0, 0), 200000 * 1.25 / 1e6);
+  near(a.calcUsd('google', 'gemini-2.5-pro', 200001, 0, 0), 200001 * 2.5 / 1e6);
+});
+test('USD 不猜纪律：未入表模型不算钱，moneyFields 标 priceMissing', () => {
+  const a = harness().a;
+  assert.equal(a.calcUsd('openai', 'totally-unknown-xyz', 1000, 200, 0), null);
+  const mf = a.moneyFields('openai', 'totally-unknown-xyz', 1000, 200, 0);
+  assert.equal(mf.cost, null); assert.equal(mf.costUnit, 'usd'); assert.equal(mf.priceMissing, true);
+  assert.equal(a.burnRateOf('openai', 'totally-unknown-xyz', 100, 1000), null);
+});
+test('USD 端到端 + 多货币账本分桶：usd/cny/credits 各算各的不混算', () => {
+  const h = harness(); const a = h.a; const s = start(h);
+  event(h, s, {type: 'model', model: 'gpt-4o'});
+  text(h, s, '一'.repeat(50));
+  const r = done(h, s, {prompt_tokens: 1000, completion_tokens: 200, total_tokens: 1200, provider_id: 'openai'});
+  assert.equal(r.channel, 'openai'); assert.equal(r.costUnit, 'usd');
+  assert.ok(Math.abs(r.cost - 0.0045) < 1e-9, 'got ' + r.cost);
+  const burn = a.burnRateOf('openai', 'gpt-4o', 100, 1000);
+  assert.ok(burn && burn.unit === 'usd/min' && Math.abs(burn.value - 0.06) < 1e-9);
+  const h2 = harness(); const a2 = h2.a; const ts = Date.now(); // 独立账本，避免端到端回合自动入账污染
+  a2.appendLedger('s1', {ts, turnKey: 'u1', model: 'gpt-4o', channel: 'openai', outputTokens: 200, cost: 0.0045, costUnit: 'usd', afp: null});
+  a2.appendLedger('s1', {ts, turnKey: 'c1', model: 'deepseek-v4-flash', channel: 'deepseek', outputTokens: 200, cost: 0.0012, costUnit: 'cny', afp: null});
+  a2.appendLedger('s1', {ts, turnKey: 'k1', model: 'qwen3.8-max', channel: 'tokenplan', outputTokens: 200, cost: 1.92, costUnit: 'credits', afp: null});
+  const t = a2.ledgerToday();
+  assert.equal(t.turns, 3); assert.equal(t.out, 600);
+  assert.ok(Math.abs(t.usd - 0.0045) < 1e-9); assert.ok(Math.abs(t.cny - 0.0012) < 1e-9); assert.ok(Math.abs(t.credits - 1.92) < 1e-9);
+  assert.ok(Math.abs(t.byModel['gpt-4o'].usd - 0.0045) < 1e-9); assert.equal(t.byModel['gpt-4o'].cny, 0);
+});
+test('USD UI 语义：面板/费用 chip/账本显示 $，无 ¥、无 credits 摊销选择', () => {
+  const h = harness(); const a = h.a;
+  a.appendLedger('s1', {ts: Date.now(), turnKey: 'u1', model: 'gpt-4o', channel: 'openai', outputTokens: 200, cost: 0.0045, costUnit: 'usd', afp: null});
+  const html = a.buildDetailHead({status: 'done', model: 'gpt-4o', channel: 'openai', cost: 0.0045, costUnit: 'usd', afp: null,
+    tokenSource: 'usage', outputTokens: 200, tokens: 200, toolTokens: 0, promptTokens: 1000, total: 1200, cacheHit: 0,
+    segments: [], ttft: 100, seconds: 2, pauseSec: 0, modelWaitSec: 0, peak: 100, avg: 100, genSpeed: 100,
+    attached: false, replayTokens: 0, ts: Date.now(), originKnown: true});
+  assert.ok(html.includes('费用') && html.includes('$') && html.includes('OpenAI'));
+  assert.ok(html.includes('今日消耗') && !html.includes('qp-tp-tier'));
+  assert.ok(!html.includes('¥'), 'USD 面板全篇不得出现 ¥');
+  assert.ok(a.costChipHtml({cost: 0.0045, costUnit: 'usd'}).includes('$'));
+});
+test('USD 覆盖层：用户条目前置优先命中；坏 tiers 整份忽略不崩，内置表不丢', () => {
+  const h = harness({'qp_token_speed_pricing': JSON.stringify({usd: {openai: {models: [{keys: ['my-gpt'], tiers: [{upTo: Infinity, input: 1, output: 2}]}]}}})});
+  assert.ok(Math.abs(h.a.calcUsd('openai', 'my-gpt', 10000, 10000, 0) - 0.03) < 1e-9);
+  assert.ok(Math.abs(h.a.calcUsd('openai', 'gpt-4o', 1000, 200, 0) - 0.0045) < 1e-9); // 内置不丢
+  const h2 = harness({'qp_token_speed_pricing': JSON.stringify({usd: {openai: {models: [{keys: ['bad-gpt']}]}}})}); // 缺 tiers
+  assert.equal(h2.a.calcUsd('openai', 'bad-gpt', 100, 100, 0), null);
+  assert.ok(h2.a.calcUsd('openai', 'gpt-4o', 1000, 200, 0) != null);
+});
 (async()=>{
   let failed=0;
   for(const [name,fn] of tests) {try{await fn();console.log('PASS '+name);}catch(e){failed++;console.log('FAIL '+name+' :: '+e.message);}}

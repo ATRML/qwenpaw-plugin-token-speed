@@ -33,6 +33,7 @@ function ledgerEntryOf(sid, r) {
     out: r.outputTokens || 0,
     credits: r.costUnit === "credits" ? r.cost : null,
     cny: r.costUnit === "cny" ? r.cost : null,
+    usd: r.costUnit === "usd" ? r.cost : null,
     plan: r.afp != null ? r.afp : null
   };
 }
@@ -62,7 +63,7 @@ export function ledgerToday() {
   d.setHours(0, 0, 0, 0);
   var start = d.getTime();
   var a = loadLedger();
-  var sum = { turns: 0, out: 0, credits: 0, cny: 0, plan: 0, byModel: {} };
+  var sum = { turns: 0, out: 0, credits: 0, cny: 0, usd: 0, plan: 0, byModel: {} };
   for (var i = 0; i < a.length; i++) {
     var e = a[i];
     if (!e || (e.ts || 0) < start) continue;
@@ -70,13 +71,15 @@ export function ledgerToday() {
     sum.out += e.out || 0;
     if (e.credits != null) sum.credits += e.credits;
     if (e.cny != null) sum.cny += e.cny;
+    if (e.usd != null) sum.usd += e.usd;
     if (e.plan != null) sum.plan += e.plan;
     var mk = e.model || "未知";
-    var bm = sum.byModel[mk] || (sum.byModel[mk] = { turns: 0, out: 0, credits: 0, cny: 0, plan: 0 });
+    var bm = sum.byModel[mk] || (sum.byModel[mk] = { turns: 0, out: 0, credits: 0, cny: 0, usd: 0, plan: 0 });
     bm.turns++;
     bm.out += e.out || 0;
     if (e.credits != null) bm.credits += e.credits;
     if (e.cny != null) bm.cny += e.cny;
+    if (e.usd != null) bm.usd += e.usd;
     if (e.plan != null) bm.plan += e.plan;
   }
   return sum;

@@ -41,6 +41,11 @@ export function resolveChannel(providerId, baseUrl) {
   if (bu.indexOf("coding.dashscope") >= 0) return "coding";
   // 百炼按量付费（dashscope.aliyuncs.com 通用端点 / provider 名含 dashscope|bailian）：人民币刊例价计价
   if (bu.indexOf("dashscope.aliyuncs.com") >= 0 || /dashscope|bailian/.test(pid)) return "dashscope";
+  // 通用 USD 渠道：只认 provider/端点证据，不做模型名兜底（避免把第三方转售误判成官方刊例价）。
+  // Google 仅认 Gemini API 端点或 gemini provider 名；Vertex（aiplatform）价不同，不在此列。
+  if (bu.indexOf("api.openai.com") >= 0 || pid.indexOf("openai") >= 0) return "openai";
+  if (bu.indexOf("api.anthropic.com") >= 0 || pid.indexOf("anthropic") >= 0) return "anthropic";
+  if (bu.indexOf("generativelanguage.googleapis.com") >= 0 || pid.indexOf("gemini") >= 0) return "google";
   // 自定义渠道映射（纯数据：PRICING.customChannels，可经 localStorage 覆盖层注入）
   var _cc = customChannelOf(pid, bu);
   if (_cc) return _cc;
