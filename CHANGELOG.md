@@ -10,6 +10,10 @@
 - **UI 货币感知**：悬浮条费用 chip、详情计费卡、用量行、今日账本、燃烧率（新增 `$/min`）均按 `costUnit` 分支显示 `$`/`¥`/`◈`/`▣`；渠道标签与 hover 说明新增三 provider。USD 面板全篇无 ¥、无 credits 摊销选择。
 - **覆盖层**：`usd.<provider>.models` 经 tiers 校验前置合并，可修正/补充美元价目；坏结构整份忽略不崩。
 
+## 交互降噪：账本摊销按需开启
+
+- **"选择套餐"下拉默认收起**：摊销公式 `credits × 月费/月额度` 预设用户真付了月费，但免费额度/试用/赠送 credits 的人并不订阅——给不付费者常驻一个付费档位下拉是无中生有。改为 opt-in：账本有 credits 时默认只显示一个不起眼的"按套餐摊销"入口，点击才展开档位选择（`localStorage["qp_token_speed_amort_on"]` 持久化），可"收起"隐藏；计费卡的摊销折算同步门控。不订阅的人永远不用看见它。纯不碰 Token Plan 的人本就看不到（早已按 `credits>0` 门控）。
+
 ## 文案中立化
 
 - `plugin.json` / `package.json` / `README` 重定位为通用 LLM 计价器，多 provider 美元计价前置，阿里百炼降为受支持渠道之一。README 增美元计价来源（OpenAI/Anthropic/Google 官方页）与 USD 覆盖层示例。

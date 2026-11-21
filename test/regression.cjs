@@ -530,16 +530,24 @@ test('UI 语义：credits 面板有刊例价折算与三分量条；plan 面板�
   assert.ok(a.costChipHtml({afp: 0.06}).includes('▣'));
   assert.equal(a.costChipHtml({}), '');
 });
-test('UI 语义：今日账本进面板，credits 存在时才有档位摊销选择', () => {
+test('UI 语义：今日账本进面板，摊销默认收起（按需开启），纯套餐账本无摊销无 ¥', () => {
   const h = harness(); const a = h.a;
   a.appendLedger('s1', {ts: Date.now(), turnKey: 'tk1', model: 'qwen3.8-max', channel: 'tokenplan', outputTokens: 200, cost: 1.92, costUnit: 'credits', afp: null});
-  const html = a.buildDetailHead({status: 'done', model: 'qwen3.8-max', channel: 'tokenplan', cost: 1.92, costUnit: 'credits', afp: null,
+  const snap = {status: 'done', model: 'qwen3.8-max', channel: 'tokenplan', cost: 1.92, costUnit: 'credits', afp: null,
     tp: {input: 1.2, cache: 0, output: 0.72, factor: 1, factorNote: '', tierIdx: 0, cacheAssumed: false, assumedBase: false},
     tokenSource: 'usage', outputTokens: 200, tokens: 200, toolTokens: 0, promptTokens: 1000, total: 1200, cacheHit: 0,
     segments: [], ttft: 100, seconds: 2, pauseSec: 0, modelWaitSec: 0, peak: 100, avg: 100, genSpeed: 100,
-    attached: false, replayTokens: 0, ts: Date.now(), originKnown: true});
-  assert.ok(html.includes('今日消耗') && html.includes('qp-tp-tier'));
-  // 纯套餐账本：无 credits → 无摊销选择、无 ¥
+    attached: false, replayTokens: 0, ts: Date.now(), originKnown: true};
+  const html = a.buildDetailHead(snap);
+  assert.ok(html.includes('今日消耗'));
+  // 默认未开启摊销：只有不起眼的入口按钮，没有档位下拉（不付费的人不被打扰）
+  assert.ok(html.includes('qp-tp-amort-on') && !html.includes('qp-tp-tier'));
+  // 主动开启后：档位下拉 + 收起按钮出现，入口按钮消失
+  const hOn = harness({'qp_token_speed_amort_on': '1'}); const aOn = hOn.a;
+  aOn.appendLedger('s1', {ts: Date.now(), turnKey: 'tk1', model: 'qwen3.8-max', channel: 'tokenplan', outputTokens: 200, cost: 1.92, costUnit: 'credits', afp: null});
+  const htmlOn = aOn.buildDetailHead(snap);
+  assert.ok(htmlOn.includes('qp-tp-tier') && htmlOn.includes('qp-tp-amort-off') && !htmlOn.includes('qp-tp-amort-on'));
+  // 纯套餐账本：无 credits → 无摊销入口、无下拉、无 ¥
   const h2 = harness(); const a2 = h2.a;
   a2.appendLedger('s1', {ts: Date.now(), turnKey: 'tkp', model: 'glm-5.3', channel: 'plan', outputTokens: 200, cost: null, costUnit: '', afp: 0.06});
   const html2 = a2.buildDetailHead({status: 'done', model: 'glm-5.3', channel: 'plan', afp: 0.06, cost: null, costUnit: '',
@@ -547,7 +555,7 @@ test('UI 语义：今日账本进面板，credits 存在时才有档位摊销选
     segments: [], ttft: 100, seconds: 2, pauseSec: 0, modelWaitSec: 0, peak: 100, avg: 100, genSpeed: 100,
     attached: false, replayTokens: 0, ts: Date.now(), originKnown: true});
   assert.ok(html2.includes('今日消耗'));
-  assert.ok(!html2.includes('qp-tp-tier') && !html2.includes('¥'));
+  assert.ok(!html2.includes('qp-tp-tier') && !html2.includes('qp-tp-amort-on') && !html2.includes('¥'));
 });
 test('USD 渠道识别：只认 provider/端点证据；Vertex 不误判；第三方转售不靠模型名猜', () => {
   const a = harness().a;

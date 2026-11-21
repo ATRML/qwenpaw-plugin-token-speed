@@ -94,11 +94,15 @@ export var styles = `
     #qp-token-speed-detail .qp-lg-sum { display:flex; flex-wrap:wrap; gap:6px 14px; color:#c3d0e4; font-size:12px; }
     #qp-token-speed-detail .qp-lg-cr { color:var(--qp-gold); font-weight:600; }
     #qp-token-speed-detail .qp-lg-cny { color:#a8ecd9; font-weight:600; }
+    #qp-token-speed-detail .qp-lg-usd { color:#9fe8c9; font-weight:600; }
     #qp-token-speed-detail .qp-lg-plan { color:var(--qp-blue); font-weight:600; }
     #qp-token-speed-detail .qp-lg-amort { color:#98a9c1; }
     #qp-token-speed-detail .qp-lg-models { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
     #qp-token-speed-detail .qp-lg-m { padding:2px 8px; border:1px solid var(--qp-line); border-radius:7px; color:#9fb0c8; font-size:11px; background:#ffffff05; }
     #qp-token-speed-detail .qp-tp-select { margin-left:auto; padding:2px 6px; border-radius:6px; border:1px solid #ffd47930; background:#1a2230; color:var(--qp-gold); font-size:11px; cursor:pointer; }
+    #qp-token-speed-detail .qp-tp-amort-toggle { margin-left:auto; padding:1px 7px; border:1px solid var(--qp-line); border-radius:6px; background:transparent; color:#7f92ad; font-size:10px; cursor:pointer; }
+    #qp-token-speed-detail .qp-tp-amort-toggle:hover { color:var(--qp-gold); border-color:#ffd47930; }
+    #qp-token-speed-detail .qp-tp-select + .qp-tp-amort-toggle { margin-left:6px; }
     /* 说明 / 图表 / 分段表 */
     #qp-token-speed-detail .qp-d-explain { color:#91a4c0; font-size:11px; line-height:1.7; border-top:1px solid #ffffff12; padding-top:12px; margin-bottom:18px; }
     #qp-token-speed-detail .qp-d-note { font-size:11px; color:var(--qp-warn); background:#e9a55e0b; border:1px solid #dba66d2a; border-radius:9px; padding:8px 11px; margin-bottom:12px; line-height:1.6; }

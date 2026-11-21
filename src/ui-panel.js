@@ -91,7 +91,7 @@ export function billingCardHtml(r) {
     cap = '≈' + fmtMoney(creditsToCny(r.cost), '¥') + ' 刊例价';
     var tierId = tpTierPref(), plan = null;
     for (var i = 0; i < TP_PLANS.length; i++) if (TP_PLANS[i].id === tierId) plan = TP_PLANS[i];
-    if (plan) cap += ' · 按 ' + plan.name + ' 摊销 ≈' + fmtMoney(r.cost * plan.price / plan.quota, '¥');
+    if (amortOn() && plan) cap += ' · 按 ' + plan.name + ' 摊销 ≈' + fmtMoney(r.cost * plan.price / plan.quota, '¥');
     if (r.tp && r.tp.factor < 1) cap = '<span class="qp-d-disc">' + escHtml(r.tp.factorNote || '折扣生效') + '</span>' + cap;
   } else if (r.cost != null && r.costUnit === "plan") {
     label = '套餐抵扣';
@@ -149,6 +149,9 @@ export function tpBreakdownHtml(r) {
 
 // 今日账本（本地滚动流水聚合；credits>0 时提供套餐档位摊销选择）
 function tpTierPref() { try { return localStorage.getItem("qp_token_speed_tp_tier") || ""; } catch (e) { return ""; } }
+// 摊销按需开启（默认收起）：消耗 credits ≠ 付了月费——免费额度/试用/赠送 credits 的人并不订阅。
+// 不主动开启就不显示档位选择、也不摊销，避免给不付费的人算一个无中生有的订阅成本。
+function amortOn() { try { return localStorage.getItem("qp_token_speed_amort_on") === "1"; } catch (e) { return false; } }
 export function ledgerHtml() {
   var s = ledgerToday();
   if (!s.turns) return "";
@@ -159,15 +162,20 @@ export function ledgerHtml() {
   if (s.plan > 0) parts.push('<span class="qp-lg-plan">▣ ' + fmtPlan(s.plan) + ' 额度</span>');
   var tierSel = "";
   if (s.credits > 0) {
-    var cur = tpTierPref(), plan = null, i;
-    for (i = 0; i < TP_PLANS.length; i++) if (TP_PLANS[i].id === cur) plan = TP_PLANS[i];
-    var opts = '<option value="">不摊销</option>';
-    for (i = 0; i < TP_PLANS.length; i++) {
-      var p = TP_PLANS[i];
-      opts += '<option value="' + p.id + '"' + (cur === p.id ? ' selected' : '') + '>' + p.name + ' ¥' + p.price + '/月</option>';
+    if (amortOn()) {
+      var cur = tpTierPref(), plan = null, i;
+      for (i = 0; i < TP_PLANS.length; i++) if (TP_PLANS[i].id === cur) plan = TP_PLANS[i];
+      var opts = '<option value="">不摊销</option>';
+      for (i = 0; i < TP_PLANS.length; i++) {
+        var p = TP_PLANS[i];
+        opts += '<option value="' + p.id + '"' + (cur === p.id ? ' selected' : '') + '>' + p.name + ' ¥' + p.price + '/月</option>';
+      }
+      tierSel = '<select id="qp-tp-tier" class="qp-tp-select" title="选择你实际付费的 Token Plan 档位，按订阅实际成本摊销今日 credits">' + opts + '</select>'
+        + '<button type="button" id="qp-tp-amort-off" class="qp-tp-amort-toggle" title="隐藏套餐摊销（不影响 credits 统计）">收起</button>';
+      if (plan) parts.push('<span class="qp-lg-amort">按 ' + plan.name + ' 摊销 ≈' + fmtMoney(s.credits * plan.price / plan.quota, '¥') + '</span>');
+    } else {
+      tierSel = '<button type="button" id="qp-tp-amort-on" class="qp-tp-amort-toggle" title="可选：按你实际付费的 Token Plan 月费摊销今日 credits。用免费额度/不订阅可忽略">按套餐摊销</button>';
     }
-    tierSel = '<select id="qp-tp-tier" class="qp-tp-select" title="选择你的 Token Plan 档位，按订阅实际成本摊销今日 credits">' + opts + '</select>';
-    if (plan) parts.push('<span class="qp-lg-amort">按 ' + plan.name + ' 摊销 ≈' + fmtMoney(s.credits * plan.price / plan.quota, '¥') + '</span>');
   }
   var models = Object.keys(s.byModel).sort(function (a, b) { return (s.byModel[b].out || 0) - (s.byModel[a].out || 0); }).slice(0, 3);
   var mhtml = models.map(function (m) {
@@ -353,6 +361,21 @@ function bindTierSelect() {
     refreshDetail(st && st.tFirst ? liveSnapshot(st) : loadLastResult(sid));
   });
 }
+// 摊销按需开关：开启才显示档位选择，收起即隐藏（选择记忆保留，再开启恢复）。就地重绘。
+function bindAmortToggle() {
+  var sid = getSessionId(), st = getActiveStream(sid);
+  var repaint = function () { refreshDetail(st && st.tFirst ? liveSnapshot(st) : loadLastResult(sid)); };
+  /** @type {any} */ var on = document.getElementById("qp-tp-amort-on");
+  if (on && on.addEventListener) on.addEventListener("click", function () {
+    try { localStorage.setItem("qp_token_speed_amort_on", "1"); } catch (e) { /* ignore */ }
+    repaint();
+  });
+  /** @type {any} */ var off = document.getElementById("qp-tp-amort-off");
+  if (off && off.addEventListener) off.addEventListener("click", function () {
+    try { localStorage.removeItem("qp_token_speed_amort_on"); } catch (e) { /* ignore */ }
+    repaint();
+  });
+}
 // paintDetail 拆"头 + 分段表"两步——head 每拍重绘（数字实时跳），
 // 分段表增量追加（已有行不重建，滚动位置不丢）
 function paintDetail(p, snap, live) {
@@ -367,6 +390,7 @@ function paintDetail(p, snap, live) {
   if (headEl) headEl.innerHTML = buildDetailHead(snap);
   bindDetailClose(p);   // head 换 innerHTML 后关闭按钮是新节点，得重新绑
   bindTierSelect();     // 档位选择同理
+  bindAmortToggle();    // 摊销按需开关同理
   var box = p.querySelector(".qp-d-segs");
   if (box) syncSegs(box, snap.segments || [], !!live);
   p.scrollTop = top;

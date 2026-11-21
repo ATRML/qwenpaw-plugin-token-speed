@@ -2615,11 +2615,15 @@
     #qp-token-speed-detail .qp-lg-sum { display:flex; flex-wrap:wrap; gap:6px 14px; color:#c3d0e4; font-size:12px; }
     #qp-token-speed-detail .qp-lg-cr { color:var(--qp-gold); font-weight:600; }
     #qp-token-speed-detail .qp-lg-cny { color:#a8ecd9; font-weight:600; }
+    #qp-token-speed-detail .qp-lg-usd { color:#9fe8c9; font-weight:600; }
     #qp-token-speed-detail .qp-lg-plan { color:var(--qp-blue); font-weight:600; }
     #qp-token-speed-detail .qp-lg-amort { color:#98a9c1; }
     #qp-token-speed-detail .qp-lg-models { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
     #qp-token-speed-detail .qp-lg-m { padding:2px 8px; border:1px solid var(--qp-line); border-radius:7px; color:#9fb0c8; font-size:11px; background:#ffffff05; }
     #qp-token-speed-detail .qp-tp-select { margin-left:auto; padding:2px 6px; border-radius:6px; border:1px solid #ffd47930; background:#1a2230; color:var(--qp-gold); font-size:11px; cursor:pointer; }
+    #qp-token-speed-detail .qp-tp-amort-toggle { margin-left:auto; padding:1px 7px; border:1px solid var(--qp-line); border-radius:6px; background:transparent; color:#7f92ad; font-size:10px; cursor:pointer; }
+    #qp-token-speed-detail .qp-tp-amort-toggle:hover { color:var(--qp-gold); border-color:#ffd47930; }
+    #qp-token-speed-detail .qp-tp-select + .qp-tp-amort-toggle { margin-left:6px; }
     /* \u8BF4\u660E / \u56FE\u8868 / \u5206\u6BB5\u8868 */
     #qp-token-speed-detail .qp-d-explain { color:#91a4c0; font-size:11px; line-height:1.7; border-top:1px solid #ffffff12; padding-top:12px; margin-bottom:18px; }
     #qp-token-speed-detail .qp-d-note { font-size:11px; color:var(--qp-warn); background:#e9a55e0b; border:1px solid #dba66d2a; border-radius:9px; padding:8px 11px; margin-bottom:12px; line-height:1.6; }
@@ -2907,7 +2911,7 @@
       cap = "\u2248" + fmtMoney(creditsToCny(r.cost), "\xA5") + " \u520A\u4F8B\u4EF7";
       var tierId = tpTierPref(), plan = null;
       for (var i = 0; i < TP_PLANS.length; i++) if (TP_PLANS[i].id === tierId) plan = TP_PLANS[i];
-      if (plan) cap += " \xB7 \u6309 " + plan.name + " \u644A\u9500 \u2248" + fmtMoney(r.cost * plan.price / plan.quota, "\xA5");
+      if (amortOn() && plan) cap += " \xB7 \u6309 " + plan.name + " \u644A\u9500 \u2248" + fmtMoney(r.cost * plan.price / plan.quota, "\xA5");
       if (r.tp && r.tp.factor < 1) cap = '<span class="qp-d-disc">' + escHtml(r.tp.factorNote || "\u6298\u6263\u751F\u6548") + "</span>" + cap;
     } else if (r.cost != null && r.costUnit === "plan") {
       label = "\u5957\u9910\u62B5\u6263";
@@ -2965,6 +2969,13 @@
       return "";
     }
   }
+  function amortOn() {
+    try {
+      return localStorage.getItem("qp_token_speed_amort_on") === "1";
+    } catch (e) {
+      return false;
+    }
+  }
   function ledgerHtml() {
     var s = ledgerToday();
     if (!s.turns) return "";
@@ -2975,15 +2986,19 @@
     if (s.plan > 0) parts.push('<span class="qp-lg-plan">\u25A3 ' + fmtPlan(s.plan) + " \u989D\u5EA6</span>");
     var tierSel = "";
     if (s.credits > 0) {
-      var cur = tpTierPref(), plan = null, i;
-      for (i = 0; i < TP_PLANS.length; i++) if (TP_PLANS[i].id === cur) plan = TP_PLANS[i];
-      var opts = '<option value="">\u4E0D\u644A\u9500</option>';
-      for (i = 0; i < TP_PLANS.length; i++) {
-        var p = TP_PLANS[i];
-        opts += '<option value="' + p.id + '"' + (cur === p.id ? " selected" : "") + ">" + p.name + " \xA5" + p.price + "/\u6708</option>";
+      if (amortOn()) {
+        var cur = tpTierPref(), plan = null, i;
+        for (i = 0; i < TP_PLANS.length; i++) if (TP_PLANS[i].id === cur) plan = TP_PLANS[i];
+        var opts = '<option value="">\u4E0D\u644A\u9500</option>';
+        for (i = 0; i < TP_PLANS.length; i++) {
+          var p = TP_PLANS[i];
+          opts += '<option value="' + p.id + '"' + (cur === p.id ? " selected" : "") + ">" + p.name + " \xA5" + p.price + "/\u6708</option>";
+        }
+        tierSel = '<select id="qp-tp-tier" class="qp-tp-select" title="\u9009\u62E9\u4F60\u5B9E\u9645\u4ED8\u8D39\u7684 Token Plan \u6863\u4F4D\uFF0C\u6309\u8BA2\u9605\u5B9E\u9645\u6210\u672C\u644A\u9500\u4ECA\u65E5 credits">' + opts + '</select><button type="button" id="qp-tp-amort-off" class="qp-tp-amort-toggle" title="\u9690\u85CF\u5957\u9910\u644A\u9500\uFF08\u4E0D\u5F71\u54CD credits \u7EDF\u8BA1\uFF09">\u6536\u8D77</button>';
+        if (plan) parts.push('<span class="qp-lg-amort">\u6309 ' + plan.name + " \u644A\u9500 \u2248" + fmtMoney(s.credits * plan.price / plan.quota, "\xA5") + "</span>");
+      } else {
+        tierSel = '<button type="button" id="qp-tp-amort-on" class="qp-tp-amort-toggle" title="\u53EF\u9009\uFF1A\u6309\u4F60\u5B9E\u9645\u4ED8\u8D39\u7684 Token Plan \u6708\u8D39\u644A\u9500\u4ECA\u65E5 credits\u3002\u7528\u514D\u8D39\u989D\u5EA6/\u4E0D\u8BA2\u9605\u53EF\u5FFD\u7565">\u6309\u5957\u9910\u644A\u9500</button>';
       }
-      tierSel = '<select id="qp-tp-tier" class="qp-tp-select" title="\u9009\u62E9\u4F60\u7684 Token Plan \u6863\u4F4D\uFF0C\u6309\u8BA2\u9605\u5B9E\u9645\u6210\u672C\u644A\u9500\u4ECA\u65E5 credits">' + opts + "</select>";
-      if (plan) parts.push('<span class="qp-lg-amort">\u6309 ' + plan.name + " \u644A\u9500 \u2248" + fmtMoney(s.credits * plan.price / plan.quota, "\xA5") + "</span>");
     }
     var models = Object.keys(s.byModel).sort(function(a, b) {
       return (s.byModel[b].out || 0) - (s.byModel[a].out || 0);
@@ -3156,6 +3171,28 @@
       refreshDetail(st && st.tFirst ? liveSnapshot(st) : loadLastResult(sid));
     });
   }
+  function bindAmortToggle() {
+    var sid = getSessionId(), st = getActiveStream(sid);
+    var repaint = function() {
+      refreshDetail(st && st.tFirst ? liveSnapshot(st) : loadLastResult(sid));
+    };
+    var on = document.getElementById("qp-tp-amort-on");
+    if (on && on.addEventListener) on.addEventListener("click", function() {
+      try {
+        localStorage.setItem("qp_token_speed_amort_on", "1");
+      } catch (e) {
+      }
+      repaint();
+    });
+    var off = document.getElementById("qp-tp-amort-off");
+    if (off && off.addEventListener) off.addEventListener("click", function() {
+      try {
+        localStorage.removeItem("qp_token_speed_amort_on");
+      } catch (e) {
+      }
+      repaint();
+    });
+  }
   function paintDetail(p, snap, live) {
     var top = p.scrollTop || 0;
     if (!p.querySelector(".qp-d-head")) {
@@ -3172,6 +3209,7 @@
     if (headEl) headEl.innerHTML = buildDetailHead(snap);
     bindDetailClose(p);
     bindTierSelect();
+    bindAmortToggle();
     var box = p.querySelector(".qp-d-segs");
     if (box) syncSegs(box, snap.segments || [], !!live);
     p.scrollTop = top;
